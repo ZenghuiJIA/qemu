@@ -79,6 +79,10 @@ static const MemoryRegionOps ing208xx_sysctrl_ops = {
     .write = ing208xx_sysctrl_write,
     .endianness = DEVICE_NATIVE_ENDIAN,
     .valid = {
+        .min_access_size = 1,
+        .max_access_size = 4,
+    },
+    .impl = {
         .min_access_size = 4,
         .max_access_size = 4,
     },

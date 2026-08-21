@@ -17,8 +17,8 @@
 
 #define REG32(offset) ((offset) / 4)
 
-/* SYSCTRL page spans up to the GPIOTE block at +0x1f0. */
-#define ING208XX_SYSCTRL_NREGS     128
+/* The whole 4 KiB APB sub-page belongs to sys_ctrl per the datasheet. */
+#define ING208XX_SYSCTRL_NREGS     (0x1000 / 4)
 
 /* One array covers AON2 (0x0000..0x1fff) and AON1 (0x2000..0x3fff). */
 #define ING208XX_AON_NREGS         (0x4000 / 4)

@@ -36,6 +36,8 @@ struct ING208XXGpioState {
     uint32_t intr_status;
     uint32_t debounce_en;
     uint32_t debounce_ctrl;
+
+    uint32_t prev_input; /* last sampled levels, for edge detection */
 };
 
 #endif
