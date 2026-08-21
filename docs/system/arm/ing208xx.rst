@@ -54,6 +54,13 @@ vendor datasheet ``20.xlsm`` and the SDK header
      - 0x40015000 / 0x40016000
      - output loopback, pull-up idle inputs, level/edge interrupt
        detector with latched w1c status
+   * - SAR-ADC
+     - 0x4000F000
+     - configuration store returning a fixed conversion value; FIFO
+       counting not modelled
+   * - TRNG
+     - 0x40007000
+     - fresh guest-random data on every data-register read
    * - RTIMER0/1
      - 0x4001C000 / 0x4001C010
      - wrapping / one-shot / free-run modes, shared interrupt via OR gate
