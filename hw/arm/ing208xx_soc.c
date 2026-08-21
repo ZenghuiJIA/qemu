@@ -53,6 +53,10 @@ static void ing208xx_soc_initfn(Object *obj)
     object_initialize_child(obj, "dma", &s->dma, TYPE_ING208XX_DMA);
     object_initialize_child(obj, "sadc", &s->sadc, TYPE_ING208XX_SADC);
     object_initialize_child(obj, "trng", &s->trng, TYPE_ING208XX_TRNG);
+    for (i = 0; i < 2; i++) {
+        object_initialize_child(obj, "ssp[*]", &s->ssp[i], TYPE_ING208XX_SSP);
+    }
+    object_initialize_child(obj, "ssp[*]", &s->ssp[i], TYPE_ING208XX_SSP);
     object_initialize_child(obj, "usb", &s->usb, TYPE_DWC2_USB);
     object_initialize_child(obj, "rtmr-or", &s->rtmr_or, TYPE_OR_IRQ);
 
@@ -252,7 +256,6 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
     create_unimplemented_device("iomux",      ING208XX_IOMUX_BASE,    0x200);
     create_unimplemented_device("qdec",       ING208XX_QDEC_BASE,     0x100);
     create_unimplemented_device("keyscan",    ING208XX_KEYSCAN_BASE,  0x100);
-    create_unimplemented_device("spi1",       ING208XX_SPI1_BASE,     0x100);
     create_unimplemented_device("i2s",        ING208XX_I2S_BASE,      0x100);
     create_unimplemented_device("i2c0",       ING208XX_I2C0_BASE,     0x100);
     create_unimplemented_device("pte-bus",    ING208XX_PTE_BUS_BASE,  0x1000);
@@ -277,7 +280,24 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->usb), 0,
                        qdev_get_gpio_in(armv7m, ING208XX_IRQ_USB));
 
-    create_unimplemented_device("qspi-ctrl",  ING208XX_QSPI_BASE,     0x100);
+    /* SPI controllers (QSPI/AHB_SSP0 and APB_SSP1) */
+    {
+        static const uint32_t ssp_addr[2] = {
+            ING208XX_QSPI_BASE, ING208XX_SPI1_BASE,
+        };
+        static const int ssp_irq[2] = {
+            ING208XX_IRQ_SPI0, ING208XX_IRQ_SPI1,
+        };
+
+        for (i = 0; i < 2; i++) {
+            if (!sysbus_realize(SYS_BUS_DEVICE(&(s->ssp[i])), errp)) {
+                return;
+            }
+            sysbus_mmio_map(SYS_BUS_DEVICE(&(s->ssp[i])), 0, ssp_addr[i]);
+            sysbus_connect_irq(SYS_BUS_DEVICE(&(s->ssp[i])), 0,
+                               qdev_get_gpio_in(armv7m, ssp_irq[i]));
+        }
+    }
 
 }
 

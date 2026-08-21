@@ -19,6 +19,7 @@
 #include "hw/char/pl011.h"
 #include "hw/dma/ing208xx_dma.h"
 #include "hw/misc/ing208xx_sadc.h"
+#include "hw/ssi/ing208xx_ssp.h"
 #include "hw/usb/hcd-dwc2.h"
 #include "hw/core/clock.h"
 #include "hw/core/or-irq.h"
@@ -163,6 +164,7 @@ struct ING208XXState {
     ING208XXDmaState dma;
     ING208XXSadcState sadc;
     ING208XXTrngState trng;
+    ING208XXSspState ssp[2];
     DWC2State usb;
     ING208XXPitState pit[2];
     ING208XXRtimerState rtimer[2];
