@@ -271,3 +271,6 @@ config ING208XX_WDT
 
 config ING208XX_PERIPH
     bool
+
+config ING208XX_PWM
+    bool

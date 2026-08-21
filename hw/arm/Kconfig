@@ -373,6 +373,7 @@ config RASPI
     select USB_DWC2
     select ING208XX_PERIPH
     select ING208XX_SSP
+    select ING208XX_PWM
     select BCM2835_SPI
     select BCM2835_I2C
 

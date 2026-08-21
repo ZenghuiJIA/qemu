@@ -53,6 +53,7 @@ static void ing208xx_soc_initfn(Object *obj)
     object_initialize_child(obj, "dma", &s->dma, TYPE_ING208XX_DMA);
     object_initialize_child(obj, "sadc", &s->sadc, TYPE_ING208XX_SADC);
     object_initialize_child(obj, "trng", &s->trng, TYPE_ING208XX_TRNG);
+    object_initialize_child(obj, "pwm", &s->pwm, TYPE_ING208XX_PWM);
     for (i = 0; i < 2; i++) {
         object_initialize_child(obj, "ssp[*]", &s->ssp[i], TYPE_ING208XX_SSP);
     }
@@ -252,7 +253,11 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
                            qdev_get_gpio_in(armv7m, gpio_irq[i]));
     }
 
-    create_unimplemented_device("pwm",        ING208XX_PWM_BASE,      0x200);
+    /* PWM controller */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->pwm), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->pwm), 0, ING208XX_PWM_BASE);
     create_unimplemented_device("iomux",      ING208XX_IOMUX_BASE,    0x200);
     create_unimplemented_device("qdec",       ING208XX_QDEC_BASE,     0x100);
     create_unimplemented_device("keyscan",    ING208XX_KEYSCAN_BASE,  0x100);
