@@ -72,6 +72,7 @@ Board-specific documentation
    :maxdepth: 1
 
    arm/max78000
+   arm/ing208xx
    arm/integratorcp
    arm/mps2
    arm/musca
