@@ -261,3 +261,10 @@ config AXIADO_CLK
     bool
 
 source macio/Kconfig
+
+config ING208XX_SYSCTRL
+    bool
+    select UNIMP
+
+config ING208XX_WDT
+    bool

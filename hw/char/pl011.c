@@ -48,6 +48,9 @@ DeviceState *pl011_create(hwaddr addr, qemu_irq irq, Chardev *chr)
     return dev;
 }
 
+/* Fixed modelled receive-timeout interval (see pl011.h). */
+#define PL011_RX_TIMEOUT_NS (NANOSECONDS_PER_SECOND / 1000)
+
 /* Flag Register, UARTFR */
 #define PL011_FLAG_RI   0x100
 #define PL011_FLAG_TXFE 0x80
@@ -174,6 +177,27 @@ static inline void pl011_reset_tx_fifo(PL011State *s)
     s->flags |= PL011_FLAG_TXFE;
 }
 
+static void pl011_rx_timeout_restart(PL011State *s)
+{
+    if (s->read_count > 0) {
+        timer_mod(s->rtimeout_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                  PL011_RX_TIMEOUT_NS);
+    } else {
+        timer_del(s->rtimeout_timer);
+    }
+}
+
+static void pl011_rx_timeout(void *opaque)
+{
+    PL011State *s = opaque;
+
+    if (s->read_count > 0) {
+        s->int_level |= INT_RT;
+        pl011_update(s);
+    }
+}
+
 static void pl011_fifo_rx_put(void *opaque, uint32_t value)
 {
     PL011State *s = (PL011State *)opaque;
@@ -190,6 +214,7 @@ static void pl011_fifo_rx_put(void *opaque, uint32_t value)
         trace_pl011_fifo_rx_full();
         s->flags |= PL011_FLAG_RXFF;
     }
+    pl011_rx_timeout_restart(s);
     if (s->read_count == s->read_trigger) {
         s->int_level |= INT_RX;
         pl011_update(s);
@@ -277,6 +302,9 @@ static uint32_t pl011_read_rxdata(PL011State *s)
     if (s->read_count == s->read_trigger - 1) {
         s->int_level &= ~INT_RX;
     }
+    /* Reading from DR clears any pending receive timeout indication */
+    s->int_level &= ~INT_RT;
+    pl011_rx_timeout_restart(s);
     trace_pl011_read_fifo(s->read_count, fifo_depth);
     s->rsr = c >> 8;
     pl011_update(s);
@@ -580,6 +608,24 @@ static const VMStateDescription vmstate_pl011_clock = {
     }
 };
 
+static bool pl011_rtimeout_needed(void *opaque)
+{
+    PL011State *s = opaque;
+
+    return timer_pending(s->rtimeout_timer);
+}
+
+static const VMStateDescription vmstate_pl011_rtimeout = {
+    .name = "pl011/rtimeout",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = pl011_rtimeout_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_TIMER_PTR(rtimeout_timer, PL011State),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static int pl011_post_load(void *opaque, int version_id)
 {
     PL011State* s = opaque;
@@ -633,6 +679,7 @@ static const VMStateDescription vmstate_pl011 = {
     },
     .subsections = (const VMStateDescription * const []) {
         &vmstate_pl011_clock,
+        &vmstate_pl011_rtimeout,
         NULL
     }
 };
@@ -647,6 +694,9 @@ static void pl011_init(Object *obj)
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
     PL011State *s = PL011(obj);
     int i;
+
+    s->rtimeout_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                     pl011_rx_timeout, s);
 
     memory_region_init_io(&s->iomem, OBJECT(s), &pl011_ops, s, "pl011", 0x1000);
     sysbus_init_mmio(sbd, &s->iomem);
@@ -672,6 +722,7 @@ static void pl011_reset(DeviceState *dev)
 {
     PL011State *s = PL011(dev);
 
+    timer_del(s->rtimeout_timer);
     s->lcr = 0;
     s->rsr = 0;
     s->dmacr = 0;

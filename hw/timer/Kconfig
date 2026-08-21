@@ -68,3 +68,9 @@ config AVR_TIMER16
 
 config HEX_QTIMER
     bool
+
+config ING208XX_PIT
+    bool
+
+config ING208XX_RTIMER
+    bool

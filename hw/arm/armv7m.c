@@ -213,15 +213,40 @@ static const MemoryRegionOps v7m_systick_ops = {
  * Unassigned portions of the PPB space are RAZ/WI for privileged
  * accesses, and fault for non-privileged accesses.
  */
+static uint32_t armv7m_dwt_cyccnt_read(ARMv7MState *s)
+{
+    uint64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    uint64_t freq = clock_get_hz(s->cpuclk);
+
+    if (!s->dwt_cyccnt_ena || freq == 0) {
+        return 0;
+    }
+    return muldiv64(now - s->dwt_cyccnt_base_ns, freq,
+                    NANOSECONDS_PER_SECOND) & 0xffffffffu;
+}
+
 static MemTxResult ppb_default_read(void *opaque, hwaddr addr,
                                     uint64_t *data, unsigned size,
                                     MemTxAttrs attrs)
 {
-    qemu_log_mask(LOG_UNIMP, "Read of unassigned area of PPB: offset 0x%x\n",
-                  (uint32_t)addr);
+    ARMv7MState *s = opaque;
+
     if (attrs.user) {
         return MEMTX_ERROR;
     }
+
+    if (addr == 0x1004) { /* DWT_CYCCNT */
+        *data = armv7m_dwt_cyccnt_read(s);
+        fprintf(stderr, "[DWTDBG] read=%u freq=%u clk=%p base=%lu now=%lu\n",
+                (unsigned)*data, (unsigned)clock_get_hz(s->cpuclk),
+                s->cpuclk,
+                (unsigned long)s->dwt_cyccnt_base_ns,
+                (unsigned long)qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+        return MEMTX_OK;
+    }
+
+    qemu_log_mask(LOG_UNIMP, "Read of unassigned area of PPB: offset 0x%x\n",
+                  (uint32_t)addr);
     *data = 0;
     return MEMTX_OK;
 }
@@ -230,11 +255,32 @@ static MemTxResult ppb_default_write(void *opaque, hwaddr addr,
                                      uint64_t value, unsigned size,
                                      MemTxAttrs attrs)
 {
-    qemu_log_mask(LOG_UNIMP, "Write of unassigned area of PPB: offset 0x%x\n",
-                  (uint32_t)addr);
+    ARMv7MState *s = opaque;
+
     if (attrs.user) {
         return MEMTX_ERROR;
     }
+
+    switch (addr) {
+    case 0x1000: /* DWT_CTRL: bit0 is CYCCNTENA */
+    {
+        bool ena = value & 1;
+
+        if (ena != s->dwt_cyccnt_ena) {
+            s->dwt_cyccnt_base_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+            s->dwt_cyccnt_ena = ena;
+        }
+        return MEMTX_OK;
+    }
+    case 0x1004: /* DWT_CYCCNT: write clears the counter */
+        s->dwt_cyccnt_base_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+        return MEMTX_OK;
+    default:
+        break;
+    }
+
+    qemu_log_mask(LOG_UNIMP, "Write of unassigned area of PPB: offset 0x%x\n",
+                  (uint32_t)addr);
     return MEMTX_OK;
 }
 

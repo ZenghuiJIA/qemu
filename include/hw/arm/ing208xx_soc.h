@@ -18,7 +18,13 @@
 #include "hw/arm/armv7m.h"
 #include "hw/char/pl011.h"
 #include "hw/core/clock.h"
+#include "hw/core/or-irq.h"
 #include "hw/core/sysbus.h"
+#include "hw/gpio/ing208xx_gpio.h"
+#include "hw/misc/ing208xx_sysctrl.h"
+#include "hw/misc/ing208xx_wdt.h"
+#include "hw/timer/ing208xx_pit.h"
+#include "hw/timer/ing208xx_rtimer.h"
 #include "qom/object.h"
 
 #define TYPE_ING208XX_SOC "ing208xx-soc"
@@ -26,7 +32,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(ING208XXState, ING208XX_SOC)
 
 /*
  * Memory map (see SDK ing20/ingsoc.h):
- *   0x00000000  ROM            (boot ROM, not modelled yet)
+ *   0x00000000  ROM            200 KiB boot ROM (stubbed: every call returns)
  *   0x02000000  FLASH          256 KiB (2 Mbit) NOR via QSPI XIP
  *   0x04000000  AHB_QSPI_MEM   alternate XIP window (not modelled yet)
  *   0x20000000  SYS_MEM        48 KiB main SRAM
@@ -37,6 +43,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(ING208XXState, ING208XX_SOC)
  *   0x40180000  AHB USB controller
  */
 #define ING208XX_ROM_BASE          0x00000000u
+#define ING208XX_ROM_SIZE          (200 * 1024)
 #define ING208XX_FLASH_BASE        0x02000000u
 #define ING208XX_FLASH_SIZE        (256 * 1024)
 /* Default boot entry: boot ROM jumps here (flash offset 0x2000). */
@@ -125,6 +132,9 @@ enum Ing208xxIRQ {
 };
 
 #define ING208XX_NUM_UARTS         2
+#define ING208XX_NUM_TIMERS        2
+#define ING208XX_NUM_RTIMERS       2
+#define ING208XX_NUM_GPIOS         2
 
 /* Main oscillator frequency, OSC_CLK_FREQ in the SDK. */
 #define ING208XX_OSC_CLK_FREQ      (24 * 1000000ULL)
@@ -138,11 +148,19 @@ struct ING208XXState {
 
     ARMv7MState armv7m;
 
+    MemoryRegion rom;
     MemoryRegion flash;
     MemoryRegion sram;
     MemoryRegion share_ram;
 
     PL011State uart[ING208XX_NUM_UARTS];
+    ING208XXSysctlState sysctl;
+    ING208XXAonState aon;
+    ING208XXWdtState wdt;
+    ING208XXPitState pit[2];
+    ING208XXRtimerState rtimer[2];
+    OrIRQState rtmr_or;
+    ING208XXGpioState gpio[2];
 
     Clock *sysclk;
     Clock *refclk;

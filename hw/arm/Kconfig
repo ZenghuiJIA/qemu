@@ -379,6 +379,12 @@ config ING208XX_SOC
     select ARM_V7M
     select PL011
     select UNIMP
+    select OR_IRQ
+    select ING208XX_SYSCTRL
+    select ING208XX_WDT
+    select ING208XX_PIT
+    select ING208XX_RTIMER
+    select ING208XX_GPIO
 
 config STM32F100_SOC
     bool

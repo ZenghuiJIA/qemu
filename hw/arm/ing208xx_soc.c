@@ -47,6 +47,23 @@ static void ing208xx_soc_initfn(Object *obj)
         object_initialize_child(obj, "uart[*]", &s->uart[i], TYPE_PL011);
     }
 
+    object_initialize_child(obj, "sysctl", &s->sysctl, TYPE_ING208XX_SYSCTRL);
+    object_initialize_child(obj, "aon", &s->aon, TYPE_ING208XX_AON);
+    object_initialize_child(obj, "wdt", &s->wdt, TYPE_ING208XX_WDT);
+    object_initialize_child(obj, "rtmr-or", &s->rtmr_or, TYPE_OR_IRQ);
+
+    for (i = 0; i < ING208XX_NUM_TIMERS; i++) {
+        object_initialize_child(obj, "pit[*]", &s->pit[i], TYPE_ING208XX_PIT);
+    }
+    for (i = 0; i < ING208XX_NUM_RTIMERS; i++) {
+        object_initialize_child(obj, "rtimer[*]", &s->rtimer[i],
+                                TYPE_ING208XX_RTIMER);
+    }
+    for (i = 0; i < ING208XX_NUM_GPIOS; i++) {
+        object_initialize_child(obj, "gpio[*]", &s->gpio[i],
+                                TYPE_ING208XX_GPIO);
+    }
+
     s->sysclk = qdev_init_clock_in(DEVICE(s), "sysclk", NULL, NULL, 0);
     s->refclk = qdev_init_clock_in(DEVICE(s), "refclk", NULL, NULL, 0);
 }
@@ -71,6 +88,26 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
      * the main oscillator.
      */
     clock_set_hz(s->refclk, ING208XX_RTC_CLK_FREQ);
+
+    /*
+     * Boot ROM stub: the vendor mask ROM holds power-up/PLL sequences the
+     * SDK calls through hardcoded entry points (e.g. SYSCTRL_Init calls
+     * 0x101d/0xf05/0xe21). Fill the whole region with "bx lr" so every
+     * ROM call becomes an immediate return. A real ROM image can replace
+     * this later via -object loader / -bios once available.
+     */
+    memory_region_init_ram(&s->rom, OBJECT(dev_soc), "ING208xx.rom",
+                           ING208XX_ROM_SIZE, &error_fatal);
+    {
+        uint16_t *p = memory_region_get_ram_ptr(&s->rom);
+        size_t idx, n = ING208XX_ROM_SIZE / sizeof(*p);
+
+        for (idx = 0; idx < n; idx++) {
+            p[idx] = 0x4770; /* bx lr */
+        }
+    }
+    memory_region_set_readonly(&s->rom, true);
+    memory_region_add_subregion(system_memory, ING208XX_ROM_BASE, &s->rom);
 
     /*
      * Flash is mapped at 0x02000000 through the QSPI XIP engine. The boot
@@ -98,7 +135,12 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
     qdev_prop_set_uint32(armv7m, "init-svtor", ING208XX_BOOT_ADDR);
     /* M-profile without security reads vectors from the NS VTOR at reset */
     qdev_prop_set_uint32(armv7m, "init-nsvtor", ING208XX_BOOT_ADDR);
-    qdev_connect_clock_in(armv7m, "cpuclk", s->sysclk);
+    /*
+     * cpuclk tracks the derived HCLK: the AON block recomputes it from
+     * the slow-clock/PLL selection registers as firmware configures them.
+     */
+    qdev_connect_clock_in(armv7m, "cpuclk",
+                          qdev_get_clock_out(DEVICE(&s->aon), "hclk"));
     qdev_connect_clock_in(armv7m, "refclk", s->refclk);
     object_property_set_link(OBJECT(&s->armv7m), "memory",
                              OBJECT(get_system_memory()), &error_abort);
@@ -117,11 +159,83 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
         sysbus_connect_irq(busdev, 0, qdev_get_gpio_in(armv7m, uart_irq[i]));
     }
 
-    create_unimplemented_device("gpiote",     ING208XX_APB_BASE + 0x001f0, 0x10);
-    create_unimplemented_device("sysctrl",    ING208XX_APB_BASE + 0x00000, 0x1f0);
-    create_unimplemented_device("wdt",        ING208XX_WDT_BASE,      0x100);
-    create_unimplemented_device("timer0",     ING208XX_TMR0_BASE,     0x100);
-    create_unimplemented_device("timer1",     ING208XX_TMR1_BASE,     0x100);
+    /* System controller and always-on registers */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->sysctl), errp) ||
+        !sysbus_realize(SYS_BUS_DEVICE(&s->aon), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->sysctl), 0, ING208XX_SYSCTRL_BASE);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->aon), 0, ING208XX_AON2_CTRL_BASE);
+    /* AON1 reg0x10 bit8 selects the RC slow clock source for SYSCTRL */
+    qdev_connect_gpio_out(DEVICE(&s->aon), 0,
+                          qdev_get_gpio_in(DEVICE(&s->sysctl), 0));
+
+    /* Watchdog (ATCWDT200) */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->wdt), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->wdt), 0, ING208XX_WDT_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->wdt), 0,
+                       qdev_get_gpio_in(armv7m, ING208XX_IRQ_WDT));
+
+    /* PIT timers */
+    for (i = 0; i < ING208XX_NUM_TIMERS; i++) {
+        static const uint32_t tmr_addr[ING208XX_NUM_TIMERS] = {
+            ING208XX_TMR0_BASE, ING208XX_TMR1_BASE,
+        };
+        static const int tmr_irq[ING208XX_NUM_TIMERS] = {
+            ING208XX_IRQ_TIMER0, ING208XX_IRQ_TIMER1,
+        };
+
+        if (!sysbus_realize(SYS_BUS_DEVICE(&(s->pit[i])), errp)) {
+            return;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(&(s->pit[i])), 0, tmr_addr[i]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&(s->pit[i])), 0,
+                           qdev_get_gpio_in(armv7m, tmr_irq[i]));
+    }
+
+    /* Reduced timers share one interrupt line through an OR gate */
+    if (!object_property_set_int(OBJECT(&s->rtmr_or), "num-lines", 2,
+                                 &error_abort)) {
+        return;
+    }
+    if (!qdev_realize(DEVICE(&s->rtmr_or), NULL, errp)) {
+        return;
+    }
+    qdev_connect_gpio_out(DEVICE(&s->rtmr_or), 0,
+                          qdev_get_gpio_in(armv7m,
+                                           ING208XX_IRQ_RCMFD_TRIM));
+    for (i = 0; i < ING208XX_NUM_RTIMERS; i++) {
+        static const uint32_t rtmr_addr[ING208XX_NUM_RTIMERS] = {
+            ING208XX_RTIMER0_BASE, ING208XX_RTIMER1_BASE,
+        };
+
+        if (!sysbus_realize(SYS_BUS_DEVICE(&(s->rtimer[i])), errp)) {
+            return;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(&(s->rtimer[i])), 0, rtmr_addr[i]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&(s->rtimer[i])), 0,
+                           qdev_get_gpio_in(DEVICE(&s->rtmr_or), i));
+    }
+
+    /* GPIO controllers (ATCGPIO100) */
+    for (i = 0; i < ING208XX_NUM_GPIOS; i++) {
+        static const uint32_t gpio_addr[ING208XX_NUM_GPIOS] = {
+            ING208XX_GPIO0_BASE, ING208XX_GPIO1_BASE,
+        };
+        static const int gpio_irq[ING208XX_NUM_GPIOS] = {
+            ING208XX_IRQ_GPIO0, ING208XX_IRQ_GPIO1,
+        };
+
+        if (!sysbus_realize(SYS_BUS_DEVICE(&(s->gpio[i])), errp)) {
+            return;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(&(s->gpio[i])), 0, gpio_addr[i]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&(s->gpio[i])), 0,
+                           qdev_get_gpio_in(armv7m, gpio_irq[i]));
+    }
+
     create_unimplemented_device("pwm",        ING208XX_PWM_BASE,      0x200);
     create_unimplemented_device("iomux",      ING208XX_IOMUX_BASE,    0x200);
     create_unimplemented_device("trng",       ING208XX_APB_BASE + 0x07000, 0x100);
@@ -132,15 +246,9 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
     create_unimplemented_device("saradc",     ING208XX_SARADC_BASE,   0x100);
     create_unimplemented_device("i2s",        ING208XX_I2S_BASE,      0x100);
     create_unimplemented_device("i2c0",       ING208XX_I2C0_BASE,     0x100);
-    create_unimplemented_device("gpio0",      ING208XX_GPIO0_BASE,    0x100);
-    create_unimplemented_device("gpio1",      ING208XX_GPIO1_BASE,    0x100);
     create_unimplemented_device("pte-bus",    ING208XX_PTE_BUS_BASE,  0x1000);
     create_unimplemented_device("pte",        ING208XX_PTE_BASE,      0x1000);
     create_unimplemented_device("asdm",       ING208XX_ASDM_BASE,     0x100);
-    create_unimplemented_device("rtimer0",    ING208XX_RTIMER0_BASE,  0x10);
-    create_unimplemented_device("rtimer1",    ING208XX_RTIMER1_BASE,  0x10);
-    create_unimplemented_device("aon2-ctrl",  ING208XX_AON2_CTRL_BASE, 0x2000);
-    create_unimplemented_device("aon1-ctrl",  ING208XX_AON1_CTRL_BASE, 0x2000);
     create_unimplemented_device("qspi-ctrl",  ING208XX_QSPI_BASE,     0x100);
     create_unimplemented_device("usb",        ING208XX_USB_BASE,      0x1000);
 }

@@ -95,6 +95,14 @@ struct ARMv7MState {
     Clock *refclk;
     Clock *cpuclk;
 
+    /*
+     * Minimal DWT cycle-counter support: guests commonly use DWT_CYCCNT
+     * (0xe0001004) for timing loops. We approximate the instruction count
+     * with elapsed virtual time at the cpuclk frequency.
+     */
+    bool dwt_cyccnt_ena;
+    uint64_t dwt_cyccnt_base_ns;
+
     /* Properties */
     char *cpu_type;
     /* MemoryRegion the board provides to us (with its devices, RAM, etc) */

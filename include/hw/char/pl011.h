@@ -17,6 +17,7 @@
 
 #include "hw/core/sysbus.h"
 #include "chardev/char-fe.h"
+#include "qemu/timer.h"
 #include "qom/object.h"
 
 #define TYPE_PL011 "pl011"
@@ -49,6 +50,13 @@ struct PL011State {
     int read_trigger;
     CharFrontend chr;
     qemu_irq irq[6];
+    /*
+     * Receive timeout support: per the PL011 TRM a receive timeout
+     * condition occurs when the RX FIFO is not empty and no further
+     * data arrives over 32 frame periods. We model it with a fixed
+     * interval since the character frame time is not tracked here.
+     */
+    QEMUTimer *rtimeout_timer;
     Clock *clk;
     bool migrate_clk;
     bool logged_disabled_uart;
