@@ -51,6 +51,7 @@ static void ing208xx_soc_initfn(Object *obj)
     object_initialize_child(obj, "aon", &s->aon, TYPE_ING208XX_AON);
     object_initialize_child(obj, "wdt", &s->wdt, TYPE_ING208XX_WDT);
     object_initialize_child(obj, "dma", &s->dma, TYPE_ING208XX_DMA);
+    object_initialize_child(obj, "usb", &s->usb, TYPE_DWC2_USB);
     object_initialize_child(obj, "rtmr-or", &s->rtmr_or, TYPE_OR_IRQ);
 
     for (i = 0; i < ING208XX_NUM_TIMERS; i++) {
@@ -257,8 +258,18 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
     create_unimplemented_device("pte-bus",    ING208XX_PTE_BUS_BASE,  0x1000);
     create_unimplemented_device("pte",        ING208XX_PTE_BASE,      0x1000);
     create_unimplemented_device("asdm",       ING208XX_ASDM_BASE,     0x100);
+    /* USB controller: Synopsys DWC2 IP */
+    object_property_add_const_link(OBJECT(&s->usb), "dma-mr",
+                                   OBJECT(get_system_memory()));
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->usb), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->usb), 0, ING208XX_USB_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->usb), 0,
+                       qdev_get_gpio_in(armv7m, ING208XX_IRQ_USB));
+
     create_unimplemented_device("qspi-ctrl",  ING208XX_QSPI_BASE,     0x100);
-    create_unimplemented_device("usb",        ING208XX_USB_BASE,      0x1000);
+
 }
 
 static void ing208xx_soc_class_init(ObjectClass *klass, const void *data)

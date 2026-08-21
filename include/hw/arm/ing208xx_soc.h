@@ -18,6 +18,7 @@
 #include "hw/arm/armv7m.h"
 #include "hw/char/pl011.h"
 #include "hw/dma/ing208xx_dma.h"
+#include "hw/usb/hcd-dwc2.h"
 #include "hw/core/clock.h"
 #include "hw/core/or-irq.h"
 #include "hw/core/sysbus.h"
@@ -159,6 +160,7 @@ struct ING208XXState {
     ING208XXAonState aon;
     ING208XXWdtState wdt;
     ING208XXDmaState dma;
+    DWC2State usb;
     ING208XXPitState pit[2];
     ING208XXRtimerState rtimer[2];
     OrIRQState rtmr_or;

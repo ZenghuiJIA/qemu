@@ -386,6 +386,7 @@ config ING208XX_SOC
     select ING208XX_RTIMER
     select ING208XX_GPIO
     select ING208XX_DMA
+    select USB_DWC2
 
 config STM32F100_SOC
     bool
