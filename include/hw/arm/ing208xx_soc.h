@@ -17,6 +17,7 @@
 
 #include "hw/arm/armv7m.h"
 #include "hw/char/pl011.h"
+#include "hw/dma/ing208xx_dma.h"
 #include "hw/core/clock.h"
 #include "hw/core/or-irq.h"
 #include "hw/core/sysbus.h"
@@ -157,6 +158,7 @@ struct ING208XXState {
     ING208XXSysctlState sysctl;
     ING208XXAonState aon;
     ING208XXWdtState wdt;
+    ING208XXDmaState dma;
     ING208XXPitState pit[2];
     ING208XXRtimerState rtimer[2];
     OrIRQState rtmr_or;

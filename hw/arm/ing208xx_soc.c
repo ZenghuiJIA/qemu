@@ -50,6 +50,7 @@ static void ing208xx_soc_initfn(Object *obj)
     object_initialize_child(obj, "sysctl", &s->sysctl, TYPE_ING208XX_SYSCTRL);
     object_initialize_child(obj, "aon", &s->aon, TYPE_ING208XX_AON);
     object_initialize_child(obj, "wdt", &s->wdt, TYPE_ING208XX_WDT);
+    object_initialize_child(obj, "dma", &s->dma, TYPE_ING208XX_DMA);
     object_initialize_child(obj, "rtmr-or", &s->rtmr_or, TYPE_OR_IRQ);
 
     for (i = 0; i < ING208XX_NUM_TIMERS; i++) {
@@ -178,6 +179,14 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->wdt), 0,
                        qdev_get_gpio_in(armv7m, ING208XX_IRQ_WDT));
 
+    /* Descriptor-based DMA controller */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->dma), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->dma), 0, ING208XX_DMA_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->dma), 0,
+                       qdev_get_gpio_in(armv7m, ING208XX_IRQ_DMA));
+
     /* PIT timers */
     for (i = 0; i < ING208XX_NUM_TIMERS; i++) {
         static const uint32_t tmr_addr[ING208XX_NUM_TIMERS] = {
@@ -241,7 +250,6 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
     create_unimplemented_device("trng",       ING208XX_APB_BASE + 0x07000, 0x100);
     create_unimplemented_device("qdec",       ING208XX_QDEC_BASE,     0x100);
     create_unimplemented_device("keyscan",    ING208XX_KEYSCAN_BASE,  0x100);
-    create_unimplemented_device("dma",        ING208XX_DMA_BASE,      0x200);
     create_unimplemented_device("spi1",       ING208XX_SPI1_BASE,     0x100);
     create_unimplemented_device("saradc",     ING208XX_SARADC_BASE,   0x100);
     create_unimplemented_device("i2s",        ING208XX_I2S_BASE,      0x100);
