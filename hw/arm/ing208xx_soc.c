@@ -54,6 +54,7 @@ static void ing208xx_soc_initfn(Object *obj)
     object_initialize_child(obj, "sadc", &s->sadc, TYPE_ING208XX_SADC);
     object_initialize_child(obj, "trng", &s->trng, TYPE_ING208XX_TRNG);
     object_initialize_child(obj, "pwm", &s->pwm, TYPE_ING208XX_PWM);
+    object_initialize_child(obj, "i2c", &s->i2c, TYPE_ING208XX_I2C);
     for (i = 0; i < 2; i++) {
         object_initialize_child(obj, "ssp[*]", &s->ssp[i], TYPE_ING208XX_SSP);
     }
@@ -262,7 +263,13 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
     create_unimplemented_device("qdec",       ING208XX_QDEC_BASE,     0x100);
     create_unimplemented_device("keyscan",    ING208XX_KEYSCAN_BASE,  0x100);
     create_unimplemented_device("i2s",        ING208XX_I2S_BASE,      0x100);
-    create_unimplemented_device("i2c0",       ING208XX_I2C0_BASE,     0x100);
+    /* I2C controller */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->i2c), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->i2c), 0, ING208XX_I2C0_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->i2c), 0,
+                       qdev_get_gpio_in(armv7m, ING208XX_IRQ_I2C0));
     create_unimplemented_device("pte-bus",    ING208XX_PTE_BUS_BASE,  0x1000);
     create_unimplemented_device("pte",        ING208XX_PTE_BASE,      0x1000);
     create_unimplemented_device("asdm",       ING208XX_ASDM_BASE,     0x100);

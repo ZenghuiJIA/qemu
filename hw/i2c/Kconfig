@@ -54,3 +54,6 @@ config PMBUS
 config BCM2835_I2C
     bool
     select I2C
+
+config ING208XX_I2C
+    bool

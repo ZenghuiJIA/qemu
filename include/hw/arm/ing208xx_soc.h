@@ -20,6 +20,7 @@
 #include "hw/dma/ing208xx_dma.h"
 #include "hw/misc/ing208xx_sadc.h"
 #include "hw/misc/ing208xx_pwm.h"
+#include "hw/i2c/ing208xx_i2c.h"
 #include "hw/ssi/ing208xx_ssp.h"
 #include "hw/usb/hcd-dwc2.h"
 #include "hw/core/clock.h"
@@ -166,6 +167,7 @@ struct ING208XXState {
     ING208XXSadcState sadc;
     ING208XXTrngState trng;
     ING208XXPwmState pwm;
+    ING208XXI2cState i2c;
     ING208XXSspState ssp[2];
     DWC2State usb;
     ING208XXPitState pit[2];
