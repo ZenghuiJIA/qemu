@@ -371,6 +371,7 @@ config RASPI
     select PL011 # UART
     select SDHCI
     select USB_DWC2
+    select ING208XX_PERIPH
     select BCM2835_SPI
     select BCM2835_I2C
 

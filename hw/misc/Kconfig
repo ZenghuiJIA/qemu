@@ -268,3 +268,6 @@ config ING208XX_SYSCTRL
 
 config ING208XX_WDT
     bool
+
+config ING208XX_PERIPH
+    bool

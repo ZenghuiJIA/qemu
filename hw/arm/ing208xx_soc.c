@@ -51,6 +51,8 @@ static void ing208xx_soc_initfn(Object *obj)
     object_initialize_child(obj, "aon", &s->aon, TYPE_ING208XX_AON);
     object_initialize_child(obj, "wdt", &s->wdt, TYPE_ING208XX_WDT);
     object_initialize_child(obj, "dma", &s->dma, TYPE_ING208XX_DMA);
+    object_initialize_child(obj, "sadc", &s->sadc, TYPE_ING208XX_SADC);
+    object_initialize_child(obj, "trng", &s->trng, TYPE_ING208XX_TRNG);
     object_initialize_child(obj, "usb", &s->usb, TYPE_DWC2_USB);
     object_initialize_child(obj, "rtmr-or", &s->rtmr_or, TYPE_OR_IRQ);
 
@@ -248,16 +250,23 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
 
     create_unimplemented_device("pwm",        ING208XX_PWM_BASE,      0x200);
     create_unimplemented_device("iomux",      ING208XX_IOMUX_BASE,    0x200);
-    create_unimplemented_device("trng",       ING208XX_APB_BASE + 0x07000, 0x100);
     create_unimplemented_device("qdec",       ING208XX_QDEC_BASE,     0x100);
     create_unimplemented_device("keyscan",    ING208XX_KEYSCAN_BASE,  0x100);
     create_unimplemented_device("spi1",       ING208XX_SPI1_BASE,     0x100);
-    create_unimplemented_device("saradc",     ING208XX_SARADC_BASE,   0x100);
     create_unimplemented_device("i2s",        ING208XX_I2S_BASE,      0x100);
     create_unimplemented_device("i2c0",       ING208XX_I2C0_BASE,     0x100);
     create_unimplemented_device("pte-bus",    ING208XX_PTE_BUS_BASE,  0x1000);
     create_unimplemented_device("pte",        ING208XX_PTE_BASE,      0x1000);
     create_unimplemented_device("asdm",       ING208XX_ASDM_BASE,     0x100);
+    /* SAR-ADC and TRNG behavioural models */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->sadc), errp) ||
+        !sysbus_realize(SYS_BUS_DEVICE(&s->trng), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->sadc), 0, ING208XX_SARADC_BASE);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->trng), 0,
+                    ING208XX_APB_BASE + 0x07000);
+
     /* USB controller: Synopsys DWC2 IP */
     object_property_add_const_link(OBJECT(&s->usb), "dma-mr",
                                    OBJECT(get_system_memory()));

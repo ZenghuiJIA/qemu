@@ -174,3 +174,5 @@ system_ss.add(when: 'CONFIG_AXIADO_CLK', if_true: files('axiado_clk.c'))
 
 system_ss.add(when: 'CONFIG_ING208XX_SYSCTRL', if_true: files('ing208xx_sysctrl.c'))
 system_ss.add(when: 'CONFIG_ING208XX_WDT', if_true: files('ing208xx_wdt.c'))
+
+system_ss.add(when: 'CONFIG_ING208XX_PERIPH', if_true: files('ing208xx_periph.c'))
