@@ -108,4 +108,10 @@ Known limitations
 - Peripheral request-line DMA (UART RX/SPI/I2S flows) is not serviced;
   console input relies on the PL011 receive-timeout path.
 - The sysctrl regression suite expects a newer register map revision
-  (AON1_REG5 at ``+0x14``) than the SDK copy in this tree (``+0x18``).
+  (AON1_REG5 HCLK select at ``+0x14``) than the SDK copy in this tree
+  (``+0x18``). Aliasing the two addresses was tried and rejected: the
+  vendor firmware performs read-modify-write cycles on both addresses
+  and depends on them being independent registers, so mirroring breaks
+  its boot. The clock_select/clock_get/dma test cases therefore fail on
+  this divergence until the discrepancy is resolved against the actual
+  silicon revision.
