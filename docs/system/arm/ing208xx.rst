@@ -54,6 +54,16 @@ vendor datasheet ``20.xlsm`` and the SDK header
      - 0x40015000 / 0x40016000
      - output loopback, pull-up idle inputs, level/edge interrupt
        detector with latched w1c status
+   * - SPI (QSPI/AHB_SSP0, APB_SSP1)
+     - 0x40160000 / 0x4000E000
+     - FIFO flag semantics with full-duplex loopback; attached SPI
+       flash not emulated yet
+   * - I2C0
+     - 0x40013000
+     - configuration store; bus transactions not emulated yet
+   * - PWM
+     - 0x40005000
+     - configuration store; waveform generation not emulated yet
    * - SAR-ADC
      - 0x4000F000
      - configuration store returning a fixed conversion value; FIFO
