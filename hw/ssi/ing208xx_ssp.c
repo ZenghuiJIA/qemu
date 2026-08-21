@@ -100,6 +100,25 @@ static void ing208xx_ssp_write(void *opaque, hwaddr offset,
     ING208XXSspState *s = ING208XX_SSP(opaque);
 
     switch (offset) {
+    case REG_CTRL:
+        /*
+         * Ctrl bits 0..2 are self-clearing software resets that never
+         * read back as set: SPIRST flushes both FIFOs, RXFIFORST and
+         * TXFIFORST flush their own FIFO.
+         */
+        if (value & BIT(0)) {
+            s->tx_head = s->tx_len = 0;
+            s->rx_head = s->rx_len = 0;
+        }
+        if (value & BIT(1)) {
+            s->rx_head = s->rx_len = 0;
+        }
+        if (value & BIT(2)) {
+            s->tx_head = s->tx_len = 0;
+        }
+        value &= ~(BIT(0) | BIT(1) | BIT(2));
+        s->regs[REG32(REG_CTRL)] = value;
+        break;
     case REG_DATA:
         if (s->tx_len < FIFO_DEPTH) {
             s->tx_fifo[(s->tx_head + s->tx_len) % FIFO_DEPTH] = value;
