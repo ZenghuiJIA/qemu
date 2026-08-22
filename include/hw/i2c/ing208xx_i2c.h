@@ -34,6 +34,13 @@ struct ING208XXI2cState {
     /* virtual STK8BA58 slave: per-register echo, reg0 = chip id 0x87 */
     uint8_t sensor_mem[256];
     uint8_t sensor_ptr;
+
+    /* master transaction engine state */
+    uint8_t txq[256];
+    int32_t txq_len;
+    uint8_t rxq[16];
+    int32_t rx_head;
+    int32_t rx_cnt;
 };
 
 #endif

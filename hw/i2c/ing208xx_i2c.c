@@ -25,15 +25,58 @@ static uint64_t ing208xx_i2c_read(void *opaque, hwaddr offset, unsigned size)
     ING208XXI2cState *s = ING208XX_I2C(opaque);
 
     switch (offset) {
-    case 0x18: /* Status: transactions complete instantly */
-        return s->regs[REG32(offset)] | (1u << 9);
-    case 0x20: /* Data: read virtual sensor register */
-        return s->sensor_mem[s->sensor_ptr & 0xff];
+    case 0x18: /* Status: CMPL done; bit0 reflects RX delivery queue */
+    {
+        uint32_t st = s->regs[REG32(offset)] | (1u << 9);
+
+        if (s->rx_cnt > 0) {
+            st &= ~(1u << 0);
+        } else {
+            st |= (1u << 0);
+        }
+        return st;
+    }
+    case 0x20: /* Data: pop prepared RX byte */
+    {
+        uint8_t v = 0xff;
+
+        if (s->rx_cnt > 0) {
+            v = s->rxq[s->rx_head];
+            s->rx_head++;
+            s->rx_cnt--;
+        }
+        return v;
+    }
     default:
         if (offset < sizeof(s->regs)) {
             return s->regs[REG32(offset)];
         }
         return 0;
+    }
+}
+
+/*
+ * Issue a data transaction against the virtual slave:
+ *  - queued TX bytes: first byte is the slave register pointer, the rest
+ *    are values written at consecutive addresses
+ *  - otherwise prepare an RX window starting at the current pointer
+ */
+static void ing208xx_i2c_issue(ING208XXI2cState *s)
+{
+    int i;
+
+    if (s->txq_len > 0) {
+        s->sensor_ptr = s->txq[0];
+        for (i = 1; i < s->txq_len; i++) {
+            s->sensor_mem[(s->sensor_ptr + i - 1) & 0xff] = s->txq[i];
+        }
+        s->txq_len = 0;
+    }
+
+    s->rx_head = 0;
+    s->rx_cnt = 8;
+    for (i = 0; i < 8; i++) {
+        s->rxq[i] = s->sensor_mem[(s->sensor_ptr + i) & 0xff];
     }
 }
 
@@ -43,10 +86,15 @@ static void ing208xx_i2c_write(void *opaque, hwaddr offset,
     ING208XXI2cState *s = ING208XX_I2C(opaque);
 
     switch (offset) {
-    case 0x20: /* Data write: select virtual sensor register pointer */
-        s->sensor_ptr = value & 0xff;
+    case 0x20: /* Data write: queue TX byte */
+        if (s->txq_len < 256) {
+            s->txq[s->txq_len++] = value & 0xff;
+        }
         break;
-    case 0x28: /* Cmd: transactions complete instantly, nothing to do */
+    case 0x28: /* Cmd: ISSUE_DATA_TRANSACTION runs the transfer */
+        if ((value & 0xff) == 1) {
+            ing208xx_i2c_issue(s);
+        }
         break;
     default:
         if (offset < sizeof(s->regs)) {
@@ -78,6 +126,11 @@ static void ing208xx_i2c_reset_hold(Object *obj, ResetType type)
     memset(s->sensor_mem, 0, sizeof(s->sensor_mem));
     s->sensor_mem[0] = 0x87; /* STK8BA58 chip id */
     s->sensor_ptr = 0;
+    memset(s->txq, 0, sizeof(s->txq));
+    memset(s->rxq, 0, sizeof(s->rxq));
+    s->txq_len = 0;
+    s->rx_head = 0;
+    s->rx_cnt = 0;
 }
 
 static void ing208xx_i2c_init(Object *obj)
