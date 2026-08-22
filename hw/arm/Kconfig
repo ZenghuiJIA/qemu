@@ -776,3 +776,11 @@ config ING916
     depends on TCG && ARM
     select ARM_V7M
     select PL011
+    select ING916_SYSCTRL
+    select ING208XX_WDT
+    select ING208XX_DMA
+    select ING208XX_GPIO
+    select ING208XX_PIT
+    select ING208XX_PERIPH
+    select ING208XX_I2C
+    select ING208XX_SSP
