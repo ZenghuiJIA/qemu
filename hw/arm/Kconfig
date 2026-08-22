@@ -769,3 +769,10 @@ config AXIADO_EVK
     default y
     depends on TCG && ARM
     select AXIADO_SOC
+
+config ING916
+    bool
+    default y
+    depends on TCG && ARM
+    select ARM_V7M
+    select PL011
