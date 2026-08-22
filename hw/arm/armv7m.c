@@ -237,11 +237,6 @@ static MemTxResult ppb_default_read(void *opaque, hwaddr addr,
 
     if (addr == 0x1004) { /* DWT_CYCCNT */
         *data = armv7m_dwt_cyccnt_read(s);
-        fprintf(stderr, "[DWTDBG] read=%u freq=%u clk=%p base=%lu now=%lu\n",
-                (unsigned)*data, (unsigned)clock_get_hz(s->cpuclk),
-                s->cpuclk,
-                (unsigned long)s->dwt_cyccnt_base_ns,
-                (unsigned long)qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
         return MEMTX_OK;
     }
 
