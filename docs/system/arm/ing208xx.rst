@@ -125,3 +125,10 @@ Known limitations
   its boot. The clock_select/clock_get/dma test cases therefore fail on
   this divergence until the discrepancy is resolved against the actual
   silicon revision.
+- Two remaining pwm failures are vendor SDK/test-suite defects, not
+  model gaps: ``PWM_SetStepTarget`` (peripheral_pwm.c) reads step1 for
+  its mask but writes the result into step0, so the ir test's
+  step1 readback can never see the target; and the halt test's own
+  printf documents an expected field value of 0x0 while its assertion
+  demands 0x2. Both would fail identically on real hardware with this
+  SDK build.
