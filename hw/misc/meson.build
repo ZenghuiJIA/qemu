@@ -178,3 +178,5 @@ system_ss.add(when: 'CONFIG_ING208XX_WDT', if_true: files('ing208xx_wdt.c'))
 system_ss.add(when: 'CONFIG_ING208XX_PERIPH', if_true: files('ing208xx_periph.c'))
 
 system_ss.add(when: 'CONFIG_ING208XX_PWM', if_true: files('ing208xx_pwm.c'))
+
+system_ss.add(when: 'CONFIG_ING916_SYSCTRL', if_true: files('ing916_sysctrl.c'))

@@ -274,3 +274,6 @@ config ING208XX_PERIPH
 
 config ING208XX_PWM
     bool
+
+config ING916_SYSCTRL
+    bool
