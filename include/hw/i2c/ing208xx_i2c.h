@@ -30,6 +30,10 @@ struct ING208XXI2cState {
     MemoryRegion iomem;
     qemu_irq irq;
     uint32_t regs[ING208XX_I2C_NREGS];
+
+    /* virtual STK8BA58 slave: per-register echo, reg0 = chip id 0x87 */
+    uint8_t sensor_mem[256];
+    uint8_t sensor_ptr;
 };
 
 #endif

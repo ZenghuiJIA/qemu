@@ -24,10 +24,17 @@ static uint64_t ing208xx_i2c_read(void *opaque, hwaddr offset, unsigned size)
 {
     ING208XXI2cState *s = ING208XX_I2C(opaque);
 
-    if (offset < sizeof(s->regs)) {
-        return s->regs[REG32(offset)];
+    switch (offset) {
+    case 0x18: /* Status: transactions complete instantly */
+        return s->regs[REG32(offset)] | (1u << 9);
+    case 0x20: /* Data: read virtual sensor register */
+        return s->sensor_mem[s->sensor_ptr & 0xff];
+    default:
+        if (offset < sizeof(s->regs)) {
+            return s->regs[REG32(offset)];
+        }
+        return 0;
     }
-    return 0;
 }
 
 static void ing208xx_i2c_write(void *opaque, hwaddr offset,
@@ -35,8 +42,17 @@ static void ing208xx_i2c_write(void *opaque, hwaddr offset,
 {
     ING208XXI2cState *s = ING208XX_I2C(opaque);
 
-    if (offset < sizeof(s->regs)) {
-        s->regs[REG32(offset)] = value;
+    switch (offset) {
+    case 0x20: /* Data write: select virtual sensor register pointer */
+        s->sensor_ptr = value & 0xff;
+        break;
+    case 0x28: /* Cmd: transactions complete instantly, nothing to do */
+        break;
+    default:
+        if (offset < sizeof(s->regs)) {
+            s->regs[REG32(offset)] = value;
+        }
+        break;
     }
 }
 
@@ -59,6 +75,9 @@ static void ing208xx_i2c_reset_hold(Object *obj, ResetType type)
     ING208XXI2cState *s = ING208XX_I2C(obj);
 
     memset(s->regs, 0, sizeof(s->regs));
+    memset(s->sensor_mem, 0, sizeof(s->sensor_mem));
+    s->sensor_mem[0] = 0x87; /* STK8BA58 chip id */
+    s->sensor_ptr = 0;
 }
 
 static void ing208xx_i2c_init(Object *obj)
