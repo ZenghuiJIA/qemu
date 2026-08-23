@@ -39,3 +39,4 @@ system_ss.add(when: 'CONFIG_HEX_QTIMER', if_true: files('qct-qtimer.c'))
 
 system_ss.add(when: 'CONFIG_ING208XX_PIT', if_true: files('ing208xx_pit.c'))
 system_ss.add(when: 'CONFIG_ING208XX_RTIMER', if_true: files('ing208xx_rtimer.c'))
+system_ss.add(when: 'CONFIG_ING916_SYSCTRL', if_true: files('ing916_pwm.c'))

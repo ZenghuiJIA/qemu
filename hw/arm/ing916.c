@@ -193,15 +193,10 @@ static void ing916_init(MachineState *machine)
     sysbus_mmio_map(SYS_BUS_DEVICE(sysctl), 1, ING916_AON_BASE);
 
     /*
-     * Behaviourally deferred blocks still get named windows at their SVD
-     * bases (pwm 0x40005000, rtc 0x40101000); mapping them after the wide
-     * RAZ placeholders and the sysctrl AON page gives them priority.
-     * Config-storage peripherals (no QEMU side effects) are also mapped
-     * here so they shadow the broad RAZ windows with read-as-written
+     * RTC and PWM are now modelled; config-storage peripherals (no QEMU
+     * side effects) also shadow the broad RAZ windows with read-as-written
      * behaviour expected by firmware.
      */
-    create_unimplemented_device("ing916-pwm", ING916_PWM_BASE, 0x1000);
-    create_unimplemented_device("ing916-rtc", ING916_RTC_BASE, 0x1000);
 
     {
         struct { const char *name; hwaddr base; bool efuse; } cfg[] = {
@@ -227,12 +222,25 @@ static void ing916_init(MachineState *machine)
         }
     }
 
+    dev = qdev_new("ing916-rtc");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, ING916_RTC_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, qdev_get_gpio_in(armv7m, 2));
+
+    dev = qdev_new("ing916-pwm");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, ING916_PWM_BASE);
+    for (i = 0; i < 4; i++) {
+        static const int pwm_irq[4] = { 24, 37, 38, 39 };
+        sysbus_connect_irq(SYS_BUS_DEVICE(dev), i,
+                           qdev_get_gpio_in(armv7m, pwm_irq[i]));
+    }
+
     /*
      * Peripherals reusing the ING208xx models: their register layouts are
      * identical on the ING916 per the FAMILY_916 SDK header branches and
      * the ing916.svd (ATCWDT200, PIT, ATCGPIO100, descriptor DMA, TRNG,
-     * SAR-ADC, I2C, SSP). PWM stays on its placeholder until its divergent
-     * layout is modelled.
+     * SAR-ADC, I2C, SSP).
      */
     dev = ing916_add_sysbus_dev(TYPE_ING208XX_WDT, ING916_WDT_BASE);
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
