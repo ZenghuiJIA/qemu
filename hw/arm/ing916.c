@@ -250,6 +250,7 @@ static void ing916_init(MachineState *machine)
 
     /* USB controller: Synopsys DWC2 IP, int_usb = n31 per the vendor soc.h. */
     dev = qdev_new(TYPE_DWC2_USB);
+    qdev_prop_set_bit(dev, "gadget-host-test", true);
     object_property_add_const_link(OBJECT(dev), "dma-mr",
                                    OBJECT(get_system_memory()));
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);

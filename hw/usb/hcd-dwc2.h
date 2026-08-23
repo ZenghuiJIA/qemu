@@ -154,6 +154,35 @@ struct DWC2State {
 #define DWC2_HFIFO_SIZE     (0x1000 * DWC2_NB_CHAN)
 
     /*
+     * Device-mode "fake host" bench state (enabled via the
+     * "gadget-host-test" property): a host-side state machine that
+     * drives control enumeration against the guest device stack through
+     * the slave-mode FIFO interface.  Not migrated; reinitialised in
+     * dwc2_reset_hold().
+     */
+    bool gadget_host_test;
+#define DWC2_DREG_SIZE      0x100   /* device globals, HSOTG 0x800..0x8ff */
+#define DWC2_NB_DEV_EP      8       /* IN+OUT EPs */
+#define GH_DFIFO_BYTES      64
+    uint32_t dreg[DWC2_DREG_SIZE / sizeof(uint32_t)];
+    uint32_t diep[8 * DWC2_NB_DEV_EP];   /* 8 words per EP @ 0x900+.. */
+    uint32_t doep[8 * DWC2_NB_DEV_EP];   /* 8 words per EP @ 0xb00+.. */
+    uint32_t dsts;                       /* DSTS is RO, off dreg */
+    uint32_t daint_pend;                 /* DAINT is RO */
+    uint32_t dieptxf[4];                 /* DIEPTXF1..4 @ 0x544.. */
+    uint32_t gh_entry;
+    bool grx_pending;
+    uint8_t dfifo[GH_DFIFO_BYTES];
+    uint16_t dfifo_rptr;
+    uint16_t dfifo_wptr;
+    QEMUTimer *gadget_timer;
+    uint8_t gh_state;
+    uint8_t gh_step;
+    bool gh_txfe_sent;
+    uint16_t gh_last_wptr;
+    uint8_t gh_stall_cnt;
+
+    /*
      *  Internal state
      */
     QEMUTimer *eof_timer;

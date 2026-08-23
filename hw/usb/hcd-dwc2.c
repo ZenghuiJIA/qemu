@@ -43,6 +43,8 @@
 #include "qemu/main-loop.h"
 #include "hw/core/qdev-properties.h"
 
+#define DIEPTXF(_a)                     HSOTG_REG(0x104 + (((_a) - 1) * 0x4))
+
 #define USB_HZ_FS       12000000
 #define USB_HZ_HS       96000000
 #define USB_FRMINTVL    12000
@@ -684,10 +686,23 @@ static uint64_t dwc2_glbreg_read(void *ptr, hwaddr addr, int index,
 
     switch (addr) {
     case GRSTCTL:
-        /* clear any self-clearing bits that were set */
         val &= ~(GRSTCTL_TXFFLSH | GRSTCTL_RXFFLSH | GRSTCTL_IN_TKNQ_FLSH |
                  GRSTCTL_FRMCNTRRST | GRSTCTL_HSFTRST | GRSTCTL_CSFTRST);
         s->glbreg[index] = val;
+        break;
+    case GRXSTSR:
+        if (s->grx_pending) {
+            val = s->gh_entry;
+        }
+        break;
+    case GRXSTSP:
+        if (s->grx_pending) {
+            val = s->gh_entry;
+            s->grx_pending = false;
+            s->grxstsp = 0;
+            s->gintsts &= ~GINTSTS_RXFLVL;
+            dwc2_update_irq(s);
+        }
         break;
     default:
         break;
@@ -966,7 +981,7 @@ static const char *hreg1nm[] = {
 };
 
 static uint64_t dwc2_hreg1_read(void *ptr, hwaddr addr, int index,
-                                unsigned size)
+                                 unsigned size)
 {
     DWC2State *s = ptr;
     uint32_t val;
@@ -984,7 +999,7 @@ static uint64_t dwc2_hreg1_read(void *ptr, hwaddr addr, int index,
 }
 
 static void dwc2_hreg1_write(void *ptr, hwaddr addr, int index, uint64_t val,
-                             unsigned size)
+                              unsigned size)
 {
     DWC2State *s = ptr;
     uint64_t orig = val;
@@ -1099,6 +1114,316 @@ static void dwc2_pcgreg_write(void *ptr, hwaddr addr, int index,
     *mmio = val;
 }
 
+enum {
+    GH_IDLE = 0,
+    GH_WAIT_CONN,
+    GH_RESET_ASSERT,
+    GH_ENUM_DONE,
+    GH_SEND_SETUP,
+    GH_WAIT_IN,
+    GH_DONE,
+};
+
+static const uint8_t gh_setups[][8] = {
+    {0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x12, 0x00},
+    {0x00, 0x05, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00},
+    {0x80, 0x06, 0x00, 0x02, 0x00, 0x00, 0x09, 0x00},
+    {0x80, 0x06, 0x00, 0x02, 0x00, 0x00, 0xff, 0x00},
+    {0x00, 0x09, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00},
+};
+#define GH_NUM_SETUPS 5
+
+#define GH_DREG(_addr)          (s->dreg[((_addr) - HSOTG_REG(0x800)) >> 2])
+#define GH_DIEP(_n, _w)         (s->diep[(_n) * 8 + (_w)])
+#define GH_DOEP(_n, _w)         (s->doep[(_n) * 8 + (_w)])
+
+static void gh_epint_raise(DWC2State *s, int ep, bool dir_in, uint32_t bits)
+{
+    if (dir_in) {
+        GH_DIEP(ep, 2) |= bits;
+        s->daint_pend |= 1u << ep;
+        s->gintsts |= GINTSTS_IEPINT;
+    } else {
+        GH_DOEP(ep, 2) |= bits;
+        s->daint_pend |= 1u << (ep + 16);
+        s->gintsts |= GINTSTS_OEPINT;
+    }
+    dwc2_update_irq(s);
+}
+
+static void gh_push_rx(DWC2State *s, uint32_t pktsts, uint32_t bcnt,
+                       uint32_t epnum)
+{
+    s->gh_entry = (pktsts << GRXSTS_PKTSTS_SHIFT) |
+                  (bcnt << GRXSTS_BYTECNT_SHIFT) |
+                  (epnum << GRXSTS_EPNUM_SHIFT);
+    s->grx_pending = true;
+    s->grxstsr = s->gh_entry;
+    s->grxstsp = s->gh_entry;
+    s->gintsts |= GINTSTS_RXFLVL;
+    dwc2_update_irq(s);
+}
+
+static void gh_dump(const char *tag, const uint8_t *buf, unsigned len)
+{
+    unsigned i;
+
+    printf("[gadget-host] %s (%u bytes):", tag, len);
+    for (i = 0; i < len; i++) {
+        printf(" %02x", buf[i]);
+    }
+    printf("\n");
+}
+
+static void gh_send_setup(DWC2State *s)
+{
+    memcpy(s->dfifo, gh_setups[s->gh_step], 8);
+    s->gh_txfe_sent = false;
+    s->dfifo_rptr = 0;
+    s->dfifo_wptr = 8;
+    gh_push_rx(s, GRXSTS_PKTSTS_SETUPRX, 8, 0);
+    gh_epint_raise(s, 0, false, DXEPINT_SETUP);
+}
+
+static void gh_tick(void *opaque)
+{
+    DWC2State *s = opaque;
+    const uint8_t *setup;
+    uint32_t want;
+    unsigned len;
+    uint16_t ctrl_wlen;
+
+    switch (s->gh_state) {
+    case GH_WAIT_CONN:
+        if (GH_DREG(HSOTG_REG(0x804)) & DCTL_SFTDISCON) {
+            timer_mod(s->gadget_timer,
+                      qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 50 * SCALE_MS);
+            break;
+        }
+        printf("[gadget-host] connected\n");
+        GH_DREG(HSOTG_REG(0x800)) &= ~DCFG_DEVADDR_MASK;
+        memset(s->diep, 0, sizeof(s->diep));
+        memset(s->doep, 0, sizeof(s->doep));
+        s->daint_pend = 0;
+        s->gintsts |= GINTSTS_USBRST;
+        dwc2_update_irq(s);
+        s->gh_state = GH_RESET_ASSERT;
+        timer_mod(s->gadget_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 25 * SCALE_MS);
+        break;
+
+    case GH_RESET_ASSERT:
+        s->dsts |= DSTS_ENUMSPD_FS48 << DSTS_ENUMSPD_SHIFT;
+        s->gintsts |= GINTSTS_ENUMDONE;
+        GH_DREG(DAINTMSK) = ~0u;
+        GH_DREG(DOEPMSK) = DXEPINT_XFERCOMPL | DXEPINT_SETUP;
+        GH_DREG(DIEPMSK) = DXEPINT_XFERCOMPL | DXEPINT_TXFEMP;
+        s->gintmsk |= GINTSTS_IEPINT | GINTSTS_OEPINT | GINTSTS_RXFLVL;
+        dwc2_update_irq(s);
+        s->gh_state = GH_SEND_SETUP;
+        timer_mod(s->gadget_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 100 * SCALE_MS);
+        break;
+
+    case GH_SEND_SETUP:
+        if (s->gh_step >= GH_NUM_SETUPS) {
+            printf("[gadget-host] enumeration complete\n");
+            s->gh_state = GH_DONE;
+            break;
+        }
+        gh_send_setup(s);
+        s->gh_state = GH_WAIT_IN;
+        timer_mod(s->gadget_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 10 * SCALE_MS);
+        break;
+
+    case GH_WAIT_IN:
+        setup = gh_setups[s->gh_step];
+        ctrl_wlen = setup[6] | (setup[7] << 8);
+        if (ctrl_wlen == 0) {
+            len = 0;
+            goto gh_stage_done;
+        }
+        want = (GH_DIEP(0, 4) & DIEPTSIZ0_XFERSIZE_MASK) + 3;
+        want &= ~3u;
+        len = s->dfifo_wptr;
+        if (len > GH_DFIFO_BYTES) {
+            len = GH_DFIFO_BYTES;
+        }
+
+        if (!(GH_DIEP(0, 0) & DXEPCTL_EPENA)) {
+            timer_mod(s->gadget_timer,
+                      qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 5 * SCALE_MS);
+            break;
+        }
+        if (!s->gh_txfe_sent) {
+            s->gh_txfe_sent = true;
+            gh_epint_raise(s, 0, true, DXEPINT_TXFEMP);
+            timer_mod(s->gadget_timer,
+                      qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 10 * SCALE_MS);
+            break;
+        }
+        if (want == 0 && len == 0) {
+            goto gh_stage_done;
+        }
+        if (len >= want) {
+            goto gh_stage_done;
+        }
+        if (s->dfifo_wptr == s->gh_last_wptr) {
+            if (++s->gh_stall_cnt >= 10) {
+                goto gh_stage_done;
+            }
+        } else {
+            s->gh_stall_cnt = 0;
+        }
+        s->gh_last_wptr = s->dfifo_wptr;
+        timer_mod(s->gadget_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 10 * SCALE_MS);
+        break;
+
+gh_stage_done:
+        {
+            char tag[16];
+
+            snprintf(tag, sizeof(tag), "step%u", s->gh_step);
+            gh_dump(tag, s->dfifo, len);
+        }
+        s->dfifo_rptr = 0;
+        s->dfifo_wptr = 0;
+        GH_DIEP(0, 0) &= ~DXEPCTL_EPENA;
+        gh_epint_raise(s, 0, true, DXEPINT_XFERCOMPL);
+        if (setup[0] & 0x80) {
+            gh_push_rx(s, GRXSTS_PKTSTS_OUTRX, 0, 0);
+            gh_epint_raise(s, 0, false, DXEPINT_XFERCOMPL);
+        }
+        s->gh_step++;
+        s->gh_stall_cnt = 0;
+        s->gh_last_wptr = 0;
+        s->gh_state = GH_SEND_SETUP;
+        timer_mod(s->gadget_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 30 * SCALE_MS);
+        break;
+
+    default:
+        break;
+    }
+}
+
+static uint64_t dwc2_dreg_read(void *ptr, hwaddr addr, unsigned size)
+{
+    DWC2State *s = ptr;
+    uint32_t idx;
+
+    if (addr >= HSOTG_REG(0x900) && addr < HSOTG_REG(0xa00)) {
+        idx = (addr - HSOTG_REG(0x900)) >> 2;
+        if ((idx & 7) == 6) {
+            return 0x40;
+        }
+        return s->diep[idx];
+    }
+    if (addr >= HSOTG_REG(0xb00) && addr < HSOTG_REG(0xc00)) {
+        idx = (addr - HSOTG_REG(0xb00)) >> 2;
+        return s->doep[idx];
+    }
+
+    switch (addr) {
+    case DSTS:
+        return s->dsts;
+    case DAINT:
+        return s->daint_pend;
+    default:
+        if (addr >= HSOTG_REG(0x800) && addr <= HSOTG_REG(0x8fc)) {
+            return s->dreg[(addr - HSOTG_REG(0x800)) >> 2];
+        }
+        qemu_log_mask(LOG_UNIMP, "%s: device-reg read 0x%" HWADDR_PRIx "\n",
+                      __func__, addr);
+        return 0;
+    }
+}
+
+static void dwc2_dreg_write(void *ptr, hwaddr addr, uint64_t val,
+                            unsigned size)
+{
+    DWC2State *s = ptr;
+    uint32_t idx;
+    uint32_t old;
+
+    if (addr >= HSOTG_REG(0x900) && addr < HSOTG_REG(0xa00)) {
+        idx = (addr - HSOTG_REG(0x900)) >> 2;
+        switch (idx & 7) {
+        case 2:
+            old = s->diep[idx];
+            s->diep[idx] = old & ~val;
+            if (s->diep[idx] != old) {
+                s->daint_pend &= ~(1u << (idx >> 3));
+                dwc2_update_irq(s);
+            }
+            break;
+        case 4:
+            if (idx == 4) {
+                s->dfifo_wptr = 0;
+                s->gh_last_wptr = 0;
+                s->gh_stall_cnt = 0;
+            }
+            s->diep[idx] = (uint32_t)val;
+            break;
+        case 0:
+            s->diep[idx] = (uint32_t)val;
+            break;
+        default:
+            s->diep[idx] = (uint32_t)val;
+            break;
+        }
+        return;
+    }
+    if (addr >= HSOTG_REG(0xb00) && addr < HSOTG_REG(0xc00)) {
+        idx = (addr - HSOTG_REG(0xb00)) >> 2;
+        switch (idx & 7) {
+        case 2:
+            old = s->doep[idx];
+            s->doep[idx] = old & ~val;
+            if (s->doep[idx] != old) {
+                s->daint_pend &= ~(1u << ((idx >> 3) + 16));
+                dwc2_update_irq(s);
+            }
+            break;
+        case 0:
+            s->doep[idx] = (uint32_t)val;
+            break;
+        default:
+            s->doep[idx] = (uint32_t)val;
+            break;
+        }
+        return;
+    }
+
+    switch (addr) {
+    case DCTL:
+        old = GH_DREG(HSOTG_REG(0x804));
+        GH_DREG(HSOTG_REG(0x804)) = (uint32_t)val;
+        if ((old & DCTL_SFTDISCON) && !(val & DCTL_SFTDISCON) &&
+            s->gadget_host_test && s->gh_state == GH_IDLE) {
+            s->gintsts &= ~GINTSTS_CURMODE_HOST;
+            s->gh_state = GH_WAIT_CONN;
+            timer_mod(s->gadget_timer,
+                      qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 20 * SCALE_MS);
+        }
+        dwc2_update_irq(s);
+        break;
+    case DSTS:
+    case DAINT:
+        break;
+    default:
+        if (addr >= HSOTG_REG(0x800) && addr <= HSOTG_REG(0x8fc)) {
+            s->dreg[(addr - HSOTG_REG(0x800)) >> 2] = (uint32_t)val;
+        } else {
+            qemu_log_mask(LOG_UNIMP, "%s: device-reg write 0x%" HWADDR_PRIx
+                          " = 0x%" PRIx64 "\n", __func__, addr, val);
+        }
+        break;
+    }
+}
+
 static uint64_t dwc2_hsotg_read(void *ptr, hwaddr addr, unsigned size)
 {
     uint64_t val;
@@ -1110,8 +1435,17 @@ static uint64_t dwc2_hsotg_read(void *ptr, hwaddr addr, unsigned size)
     case HSOTG_REG(0x100):
         val = dwc2_fszreg_read(ptr, addr, (addr - HSOTG_REG(0x100)) >> 2, size);
         break;
-    case HSOTG_REG(0x104) ... HSOTG_REG(0x3fc):
-        /* Gadget-mode registers, just return 0 for now */
+    case HSOTG_REG(0x104) ... HSOTG_REG(0x13c): {
+        uint32_t idx = (addr - HSOTG_REG(0x104)) >> 2;
+
+        if (idx < ARRAY_SIZE(((DWC2State *)ptr)->dieptxf)) {
+            val = ((DWC2State *)ptr)->dieptxf[idx];
+        } else {
+            val = 0;
+        }
+        break;
+    }
+    case HSOTG_REG(0x140) ... HSOTG_REG(0x3fc):
         val = 0;
         break;
     case HSOTG_REG(0x400) ... HSOTG_REG(0x4fc):
@@ -1121,10 +1455,7 @@ static uint64_t dwc2_hsotg_read(void *ptr, hwaddr addr, unsigned size)
         val = dwc2_hreg1_read(ptr, addr, (addr - HSOTG_REG(0x500)) >> 2, size);
         break;
     case HSOTG_REG(0x800) ... HSOTG_REG(0xdfc):
-        /* Gadget-mode registers, just return 0 for now */
-        qemu_log_mask(LOG_UNIMP, "%s: gadget read 0x%" HWADDR_PRIx "\n",
-                      __func__, addr);
-        val = 0;
+        val = dwc2_dreg_read(ptr, addr, size);
         break;
     case HSOTG_REG(0xe00) ... HSOTG_REG(0xffc):
         val = dwc2_pcgreg_read(ptr, addr, (addr - HSOTG_REG(0xe00)) >> 2, size);
@@ -1149,10 +1480,15 @@ static void dwc2_hsotg_write(void *ptr, hwaddr addr, uint64_t val,
     case HSOTG_REG(0x100):
         dwc2_fszreg_write(ptr, addr, (addr - HSOTG_REG(0x100)) >> 2, val, size);
         break;
-    case HSOTG_REG(0x104) ... HSOTG_REG(0x3fc):
-        /* Gadget-mode registers, do nothing for now */
-        qemu_log_mask(LOG_UNIMP, "%s: gadget write 0x%" HWADDR_PRIx
-                      " = 0x%" PRIx64 "\n", __func__, addr, val);
+    case HSOTG_REG(0x104) ... HSOTG_REG(0x13c): {
+        uint32_t idx = (addr - HSOTG_REG(0x104)) >> 2;
+
+        if (idx < ARRAY_SIZE(((DWC2State *)ptr)->dieptxf)) {
+            ((DWC2State *)ptr)->dieptxf[idx] = (uint32_t)val;
+        }
+        break;
+    }
+    case HSOTG_REG(0x140) ... HSOTG_REG(0x3fc):
         break;
     case HSOTG_REG(0x400) ... HSOTG_REG(0x4fc):
         dwc2_hreg0_write(ptr, addr, (addr - HSOTG_REG(0x400)) >> 2, val, size);
@@ -1161,9 +1497,7 @@ static void dwc2_hsotg_write(void *ptr, hwaddr addr, uint64_t val,
         dwc2_hreg1_write(ptr, addr, (addr - HSOTG_REG(0x500)) >> 2, val, size);
         break;
     case HSOTG_REG(0x800) ... HSOTG_REG(0xdfc):
-        /* Gadget-mode registers, do nothing for now */
-        qemu_log_mask(LOG_UNIMP, "%s: gadget write 0x%" HWADDR_PRIx
-                      " = 0x%" PRIx64 "\n", __func__, addr, val);
+        dwc2_dreg_write(ptr, addr, val, size);
         break;
     case HSOTG_REG(0xe00) ... HSOTG_REG(0xffc):
         dwc2_pcgreg_write(ptr, addr, (addr - HSOTG_REG(0xe00)) >> 2, val, size);
@@ -1185,20 +1519,28 @@ static const MemoryRegionOps dwc2_mmio_hsotg_ops = {
 
 static uint64_t dwc2_hreg2_read(void *ptr, hwaddr addr, unsigned size)
 {
-    /* TODO - implement FIFOs to support slave mode */
-    trace_usb_dwc2_hreg2_read(addr, addr >> 12, 0);
-    qemu_log_mask(LOG_UNIMP, "%s: FIFO read not implemented\n", __func__);
-    return 0;
+    DWC2State *s = ptr;
+    uint32_t ret = 0;
+
+    if (s->dfifo_rptr + 4 <= sizeof(s->dfifo)) {
+        memcpy(&ret, &s->dfifo[s->dfifo_rptr], 4);
+        s->dfifo_rptr += 4;
+    }
+    trace_usb_dwc2_hreg2_read(addr, addr >> 12, ret);
+    return ret;
 }
 
 static void dwc2_hreg2_write(void *ptr, hwaddr addr, uint64_t val,
                              unsigned size)
 {
+    DWC2State *s = ptr;
     uint64_t orig = val;
 
-    /* TODO - implement FIFOs to support slave mode */
+    if (s->dfifo_wptr + 4 <= sizeof(s->dfifo)) {
+        memcpy(&s->dfifo[s->dfifo_wptr], &val, 4);
+        s->dfifo_wptr += 4;
+    }
     trace_usb_dwc2_hreg2_write(addr, addr >> 12, orig, 0, val);
-    qemu_log_mask(LOG_UNIMP, "%s: FIFO write not implemented\n", __func__);
 }
 
 static const MemoryRegionOps dwc2_mmio_hreg2_ops = {
@@ -1244,6 +1586,9 @@ static void dwc2_reset_enter(Object *obj, ResetType type)
         c->parent_phases.enter(obj, type);
     }
 
+    if (s->gadget_timer) {
+        timer_del(s->gadget_timer);
+    }
     timer_del(s->frame_timer);
     qemu_bh_cancel(s->async_bh);
 
@@ -1329,6 +1674,25 @@ static void dwc2_reset_hold(Object *obj, ResetType type)
         c->parent_phases.hold(obj, type);
     }
 
+    memset(s->dreg, 0, sizeof(s->dreg));
+    memset(s->diep, 0, sizeof(s->diep));
+    memset(s->doep, 0, sizeof(s->doep));
+    memset(s->dieptxf, 0, sizeof(s->dieptxf));
+    memset(s->dfifo, 0, sizeof(s->dfifo));
+    s->dsts = DSTS_ENUMSPD_FS48 << DSTS_ENUMSPD_SHIFT;
+    s->daint_pend = 0;
+    s->gh_entry = 0;
+    s->grx_pending = false;
+    s->dfifo_rptr = 0;
+    s->dfifo_wptr = 0;
+    s->gh_state = GH_IDLE;
+    s->gh_step = 0;
+    s->gh_txfe_sent = false;
+    s->gh_last_wptr = 0;
+    s->gh_stall_cnt = 0;
+    s->dieptxf[0] = (64 << FIFOSIZE_DEPTH_SHIFT) | 0x500;
+    s->dieptxf[1] = (64 << FIFOSIZE_DEPTH_SHIFT) | 0x540;
+
     dwc2_update_irq(s);
 }
 
@@ -1387,6 +1751,8 @@ static void dwc2_init(Object *obj)
 {
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
     DWC2State *s = DWC2_USB(obj);
+
+    s->gadget_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, gh_tick, s);
 
     memory_region_init(&s->container, obj, "dwc2", DWC2_MMIO_SIZE);
     sysbus_init_mmio(sbd, &s->container);
@@ -1458,6 +1824,7 @@ const VMStateDescription vmstate_dwc2_state = {
 
 static const Property dwc2_usb_properties[] = {
     DEFINE_PROP_UINT32("usb_version", DWC2State, usb_version, 2),
+    DEFINE_PROP_BOOL("gadget-host-test", DWC2State, gadget_host_test, false),
 };
 
 static void dwc2_class_init(ObjectClass *klass, const void *data)
