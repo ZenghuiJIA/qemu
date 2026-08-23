@@ -1239,17 +1239,6 @@ static void gh_tick(void *opaque)
 
     case GH_WAIT_IN:
         setup = gh_setups[s->gh_step];
-        ctrl_wlen = setup[6] | (setup[7] << 8);
-        if (ctrl_wlen == 0) {
-            len = 0;
-            goto gh_stage_done;
-        }
-        want = (GH_DIEP(0, 4) & DIEPTSIZ0_XFERSIZE_MASK) + 3;
-        want &= ~3u;
-        len = s->dfifo_wptr;
-        if (len > GH_DFIFO_BYTES) {
-            len = GH_DFIFO_BYTES;
-        }
 
         if (!(GH_DIEP(0, 0) & DXEPCTL_EPENA)) {
             timer_mod(s->gadget_timer,
@@ -1263,14 +1252,27 @@ static void gh_tick(void *opaque)
                       qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 10 * SCALE_MS);
             break;
         }
-        if (want == 0 && len == 0) {
+        ctrl_wlen = setup[6] | (setup[7] << 8);
+        if (ctrl_wlen == 0) {
+            len = 0;
             goto gh_stage_done;
+        }
+        want = (GH_DIEP(0, 4) & DIEPTSIZ0_XFERSIZE_MASK) + 3;
+        want &= ~3u;
+        if (want == 0) {
+            timer_mod(s->gadget_timer,
+                      qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 5 * SCALE_MS);
+            break;
+        }
+        len = s->dfifo_wptr;
+        if (len > GH_DFIFO_BYTES) {
+            len = GH_DFIFO_BYTES;
         }
         if (len >= want) {
             goto gh_stage_done;
         }
         if (s->dfifo_wptr == s->gh_last_wptr) {
-            if (++s->gh_stall_cnt >= 10) {
+            if (++s->gh_stall_cnt >= 30) {
                 goto gh_stage_done;
             }
         } else {
@@ -1351,14 +1353,27 @@ static void dwc2_dreg_write(void *ptr, hwaddr addr, uint64_t val,
     if (addr >= HSOTG_REG(0x900) && addr < HSOTG_REG(0xa00)) {
         idx = (addr - HSOTG_REG(0x900)) >> 2;
         switch (idx & 7) {
-        case 2:
+        case 2: {
+            unsigned ep;
+            bool any = false;
+
             old = s->diep[idx];
             s->diep[idx] = old & ~val;
             if (s->diep[idx] != old) {
                 s->daint_pend &= ~(1u << (idx >> 3));
+                for (ep = 0; ep < DWC2_NB_DEV_EP; ep++) {
+                    if (s->diep[ep * 8 + 2]) {
+                        any = true;
+                        break;
+                    }
+                }
+                if (!any) {
+                    s->gintsts &= ~GINTSTS_IEPINT;
+                }
                 dwc2_update_irq(s);
             }
             break;
+        }
         case 4:
             if (idx == 4) {
                 s->dfifo_wptr = 0;
@@ -1379,14 +1394,27 @@ static void dwc2_dreg_write(void *ptr, hwaddr addr, uint64_t val,
     if (addr >= HSOTG_REG(0xb00) && addr < HSOTG_REG(0xc00)) {
         idx = (addr - HSOTG_REG(0xb00)) >> 2;
         switch (idx & 7) {
-        case 2:
+        case 2: {
+            unsigned ep;
+            bool any = false;
+
             old = s->doep[idx];
             s->doep[idx] = old & ~val;
             if (s->doep[idx] != old) {
                 s->daint_pend &= ~(1u << ((idx >> 3) + 16));
+                for (ep = 0; ep < DWC2_NB_DEV_EP; ep++) {
+                    if (s->doep[ep * 8 + 2]) {
+                        any = true;
+                        break;
+                    }
+                }
+                if (!any) {
+                    s->gintsts &= ~GINTSTS_OEPINT;
+                }
                 dwc2_update_irq(s);
             }
             break;
+        }
         case 0:
             s->doep[idx] = (uint32_t)val;
             break;

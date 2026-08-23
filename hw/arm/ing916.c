@@ -48,22 +48,36 @@
 #define ING916_TMR1_BASE        0x40003000u
 #define ING916_TMR2_BASE        0x40004000u
 #define ING916_PWM_BASE         0x40005000u
+#define ING916_IOMUX_BASE       0x40006000u
 #define ING916_TRNG_BASE        0x40007000u
+#define ING916_PDM_BASE         0x40008000u
+#define ING916_QDEC_BASE        0x40009000u
+#define ING916_KEYSCAN_BASE     0x4000A000u
+#define ING916_IR_BASE          0x4000B000u
 #define ING916_DMA_BASE         0x4000C000u
 #define ING916_SPI1_BASE        0x4000E000u
 #define ING916_SADC_BASE        0x4000F000u
+#define ING916_I2S_BASE         0x40010000u
+#define ING916_UART0_BASE       0x40011000u
+#define ING916_UART1_BASE       0x40012000u
 #define ING916_I2C0_BASE        0x40013000u
+#define ING916_I2C1_BASE        0x40014000u
 #define ING916_GPIO0_BASE       0x40015000u
 #define ING916_GPIO1_BASE       0x40016000u
-#define ING916_QSPI_BASE        0x40160000u
+#define ING916_EFUSE_BASE       0x40017000u
 #define ING916_RTC_BASE         0x40101000u
+#define ING916_I_CACHE_BASE     0x40140000u
+#define ING916_D_CACHE_BASE     0x40141000u
+#define ING916_FLASH_CTRL_BASE  0x40150000u
+#define ING916_QSPI_BASE        0x40160000u
 #define ING916_USB_BASE         0x40180000u
 /*
- * External interrupt lines per the vendor startup vector table and soc.h:
- * UART0 = 19, UART1 = 18, GPIO0 = 4, GPIO1 = 3, TIMER0 = 7, WDT = 8,
- * DMA = 22, TRNG = 25, SADC = 16.
+ * External interrupt lines per soc.h IRQn_* (n00 CacheI .. n31 usb):
+ * UART0=19 UART1=18 I2C0=21 I2C1=20 DMA=22 KeyScan=23 PWM c0=24 TRNG=25
+ * IR_INT=26 I2S=17 PDM=9 QDEC0=30/1=29/2=28 RTC=2 CacheI=0 CacheD=1
  */
 #define ING916_IRQ_UART0        19
+#define ING916_IRQ_UART1        18
 #define ING916_IRQ_GPIO0        4
 #define ING916_IRQ_GPIO1        3
 #define ING916_IRQ_TIMER0       7
@@ -73,7 +87,9 @@
 #define ING916_IRQ_APBSPI       14
 #define ING916_IRQ_QSPI         15
 #define ING916_IRQ_SADC         16
+#define ING916_IRQ_I2S          17
 #define ING916_IRQ_I2C0         21
+#define ING916_IRQ_I2C1         20
 #define ING916_IRQ_DMA          22
 #define ING916_IRQ_TRNG         25
 #define ING916_IRQ_USB          31
@@ -180,9 +196,36 @@ static void ing916_init(MachineState *machine)
      * Behaviourally deferred blocks still get named windows at their SVD
      * bases (pwm 0x40005000, rtc 0x40101000); mapping them after the wide
      * RAZ placeholders and the sysctrl AON page gives them priority.
+     * Config-storage peripherals (no QEMU side effects) are also mapped
+     * here so they shadow the broad RAZ windows with read-as-written
+     * behaviour expected by firmware.
      */
     create_unimplemented_device("ing916-pwm", ING916_PWM_BASE, 0x1000);
     create_unimplemented_device("ing916-rtc", ING916_RTC_BASE, 0x1000);
+
+    {
+        struct { const char *name; hwaddr base; bool efuse; } cfg[] = {
+            { "ing916-iomux",       ING916_IOMUX_BASE,      false },
+            { "ing916-pdm",         ING916_PDM_BASE,        false },
+            { "ing916-qdec",        ING916_QDEC_BASE,       false },
+            { "ing916-keyscan",     ING916_KEYSCAN_BASE,    false },
+            { "ing916-ir",          ING916_IR_BASE,         false },
+            { "ing916-i2s",         ING916_I2S_BASE,        false },
+            { "ing916-efuse",       ING916_EFUSE_BASE,      true  },
+            { "ing916-i-cache",     ING916_I_CACHE_BASE,    false },
+            { "ing916-d-cache",     ING916_D_CACHE_BASE,    false },
+            { "ing916-flash-ctrl",  ING916_FLASH_CTRL_BASE, false },
+        };
+        for (i = 0; i < ARRAY_SIZE(cfg); i++) {
+            DeviceState *m = qdev_new("ing916-config-storage");
+
+            if (cfg[i].efuse) {
+                qdev_prop_set_bit(m, "is-efuse", true);
+            }
+            sysbus_realize_and_unref(SYS_BUS_DEVICE(m), &error_fatal);
+            sysbus_mmio_map(SYS_BUS_DEVICE(m), 0, cfg[i].base);
+        }
+    }
 
     /*
      * Peripherals reusing the ING208xx models: their register layouts are
@@ -231,6 +274,12 @@ static void ing916_init(MachineState *machine)
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
                        qdev_get_gpio_in(armv7m, ING916_IRQ_I2C0));
 
+    dev = qdev_new(TYPE_ING208XX_I2C);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, ING916_I2C1_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
+                       qdev_get_gpio_in(armv7m, ING916_IRQ_I2C1));
+
     dev = ing916_add_sysbus_dev(TYPE_ING208XX_SSP, ING916_QSPI_BASE);
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
                        qdev_get_gpio_in(armv7m, ING916_IRQ_QSPI));
@@ -247,6 +296,17 @@ static void ing916_init(MachineState *machine)
     sysbus_mmio_map(SYS_BUS_DEVICE(uart), 0, ING916_UART0_BASE);
     sysbus_connect_irq(SYS_BUS_DEVICE(uart), 0,
                        qdev_get_gpio_in(armv7m, ING916_IRQ_UART0));
+
+    {
+        DeviceState *uart1 = qdev_new(TYPE_PL011);
+        qdev_prop_set_chr(uart1, "chardev", serial_hd(1));
+        qdev_connect_clock_in(uart1, "clk",
+                              qdev_get_clock_out(sysctl, "uart1"));
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(uart1), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(uart1), 0, ING916_UART1_BASE);
+        sysbus_connect_irq(SYS_BUS_DEVICE(uart1), 0,
+                           qdev_get_gpio_in(armv7m, ING916_IRQ_UART1));
+    }
 
     /* USB controller: Synopsys DWC2 IP, int_usb = n31 per the vendor soc.h. */
     dev = qdev_new(TYPE_DWC2_USB);
