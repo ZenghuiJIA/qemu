@@ -22,13 +22,21 @@
 #include "hw/timer/ing208xx_pit.h"
 #include "hw/core/sysbus.h"
 #include "hw/core/irq.h"
+#include "hw/core/qdev-clock.h"
 #include "qemu/bitops.h"
 
 #define PIT_IDREV           ((0x03031u << 12) | 0x03)
 #define PIT_NUM_CHANNELS    2
 
-/* Modelled PCLK: HCLK domain, 128 MHz once firmware enables the PLL. */
+/* Legacy fixed PCLK assumption for boards without a modelled clock tree. */
 #define PIT_APB_HZ          (128ull * 1000000)
+
+static inline uint64_t pit_clk_hz(const ING208XXPitState *s)
+{
+    uint64_t hz = clock_get_hz(s->pclk);
+
+    return hz ? hz : PIT_APB_HZ;
+}
 
 enum PitReg {
     PIT_REG_CFG      = 0x10,
@@ -42,12 +50,14 @@ static inline hwaddr pit_ch_reg(int ch, hwaddr base)
     return base + ch * 0x10;
 }
 
-static inline int64_t pit_period_ns(uint32_t reload)
+static inline int64_t pit_period_ns(const ING208XXPitState *s,
+                                    uint32_t reload)
 {
     if (reload == 0) {
         return 0;
     }
-    return muldiv64((uint64_t)reload + 1, NANOSECONDS_PER_SECOND, PIT_APB_HZ);
+    return muldiv64((uint64_t)reload + 1, NANOSECONDS_PER_SECOND,
+                    pit_clk_hz(s));
 }
 
 static bool ing208xx_pit_ch_running(ING208XXPitState *s, int ch)
@@ -108,7 +118,7 @@ static void ing208xx_pit_reschedule(ING208XXPitState *s)
         timer_del(c->timer);
         c->running = running;
         if (running) {
-            timer_mod(c->timer, now + pit_period_ns(period_reload));
+            timer_mod(c->timer, now + pit_period_ns(s, period_reload));
         } else {
             qemu_set_irq(c->irq, 0);
         }
@@ -127,7 +137,7 @@ uint32_t ing208xx_pit_get_counter(ING208XXPitState *s, int ch)
 
     elapsed_ns = c->acc_ns +
                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - c->start_ns;
-    ticks = muldiv64(elapsed_ns, PIT_APB_HZ, NANOSECONDS_PER_SECOND);
+    ticks = muldiv64(elapsed_ns, pit_clk_hz(s), NANOSECONDS_PER_SECOND);
 
     mode = extract32(c->ctrl, 0, 3);
     if (mode == 1) {
@@ -191,7 +201,7 @@ static void ing208xx_pit_tick(void *opaque)
     ing208xx_pit_update_irq(s);
 
     if (ing208xx_pit_ch_running(s, c->idx)) {
-        timer_mod(c->timer, now + pit_period_ns(c->reload));
+        timer_mod(c->timer, now + pit_period_ns(s, c->reload));
     }
 }
 
@@ -308,6 +318,8 @@ static void ing208xx_pit_init(Object *obj)
     memory_region_init_io(&s->iomem, OBJECT(obj), &ing208xx_pit_ops, s,
                           TYPE_ING208XX_PIT, 0x100);
     sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->iomem);
+
+    s->pclk = qdev_init_clock_in(DEVICE(obj), "pclk", NULL, NULL, 0);
 
     for (ch = 0; ch < PIT_NUM_CHANNELS; ch++) {
         sysbus_init_irq(SYS_BUS_DEVICE(s), &s->ch[ch].irq);

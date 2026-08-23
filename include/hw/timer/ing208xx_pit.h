@@ -41,6 +41,12 @@ struct ING208XXPitState {
     uint32_t int_en;
     uint32_t int_st;
     uint32_t ch_en;
+
+    /*
+     * Optional counting-clock input; boards that model the clock tree wire
+     * it up, otherwise the legacy fixed 128 MHz PCLK assumption applies.
+     */
+    Clock *pclk;
 };
 
 uint32_t ing208xx_pit_get_counter(ING208XXPitState *s, int ch);
