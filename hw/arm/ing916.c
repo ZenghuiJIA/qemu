@@ -236,6 +236,12 @@ static void ing916_init(MachineState *machine)
                            qdev_get_gpio_in(armv7m, pwm_irq[i]));
     }
 
+    dev = qdev_new("ing916-aes");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, 0x40130000u);
+    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
+                       qdev_get_gpio_in(armv7m, 10));
+
     /*
      * Peripherals reusing the ING208xx models: their register layouts are
      * identical on the ING916 per the FAMILY_916 SDK header branches and

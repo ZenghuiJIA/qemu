@@ -1,0 +1,160 @@
+Ingchips ING916xx board (``ing916``)
+====================================
+
+The Ingchips ING916xx is a Cortex-M4F based Bluetooth SoC family.  QEMU
+models the public register interface of the chip so that vendor SDK
+firmware, the CherryUSB device stack and bare-metal test images can be
+executed and debugged without hardware.
+
+Supported functionality
+-----------------------
+
+Register layout follows the ING916 SVD (32 peripherals, upstream pack at
+``.pack-x/SVD/ing916.svd``), the PG916 chapter list (``adc / comparator /
+dma / eflash / efuse / gpio / iic / ir / keyscan / PDM / pinctrl /
+pte / pwm / qdec / rtc / spi / sysctrl / timer / uart / usb / watchdog``)
+and the vendor headers ``src/StartUP/ing916/ingsoc.h`` + ``916reg.xlsm``.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Block
+     - Base address
+     - Model
+   * - Boot ROM (stub)
+     - 0x00000000
+     - 120 KiB ROM filled with ``bx lr`` so mask-ROM helpers return
+       immediately; a real ROM image can be layered later
+   * - Flash (QSPI XIP)
+     - 0x02000000
+     - 2 MiB ROM window, image at 0x02002000, VTOR initialised there;
+       XIP is a direct memory window, the QSPI controller register block
+       is separate
+   * - Main SRAM / shared RAM
+     - 0x20000000 / 0x40120000
+     - 120 KiB + 50 KiB
+   * - SYSCTRL / AON
+     - 0x40000000 / 0x40100000
+     - Behavioural clock tree (PLL 336 MHz /3 -> HCLK 112 MHz warm boot,
+       13 QEMU Clocks: sclk/hclk/pclk/pclk_aon/timer div/timer0-2/uart0-1/
+       spi/usb48/adc/clk32k)
+   * - WDT (ATCWDT200)
+     - 0x40001000
+     - unlock key 0x5aa5, interrupt + reset, clock-wired PIT
+   * - TIMER0-2 (PIT)
+     - 0x40002000 / 0x40003000 / 0x40004000
+     - split modes, clock-wired to timer0-2 outputs of the sysctrl
+   * - PWM
+     - 0x40005000
+     - 4-channel timer/PWM, ChCtrl/ChReload/Cntr, IntEn/IntSt/ChEn,
+       per-channel IRQ (n24/n37/n38/n39), capture registers
+   * - TRNG
+     - 0x40007000
+     - guest-random data on read
+   * - PDM / QDEC / KeyScan / IR / I2S
+     - 0x40008000 / 0x40009000 / 0x4000A000 / 0x4000B000 / 0x40010000
+     - Config-storage (read-as-written) with FIFO/DMA request lines
+       stubbed; IR carrier/buffer irqs, KeyScan FIFO etc. are storage
+   * - DMA
+     - 0x4000C000
+     - 8-channel descriptor engine, mem2mem at enable, per-channel FIFO
+       threshold storage; DmaCtrl routing in SYSCTRL at 0x40000030
+   * - SPI (APB) / QSPI (AHB)
+     - 0x4000E000 / 0x40160000
+     - SSP model with loopback FIFO, distinct instances per base; QSPI
+       flash backend (m25p80) is next-phase, XIP is the direct window
+   * - SAR-ADC (+ comparator inside)
+     - 0x4000F000
+     - channel-scan timing and programmable injection
+   * - UART0/1 (PL011)
+     - 0x40011000 / 0x40012000
+     - PL011 (IRQ 19/18, clk uart0/1)
+   * - I2C0/1
+     - 0x40013000 / 0x40014000
+     - master transaction engine + virtual sensor model (reused per bus),
+       IRQ 21/20
+   * - GPIO0/1 (ATCGPIO100)
+     - 0x40015000 / 0x40016000
+     - IRQ 4/3
+   * - io_mux (pinctrl)
+     - 0x40006000
+     - Config-storage
+   * - efuse
+     - 0x40017000
+     - Returns fake non-zero words (MAC, trim) so firmware validation
+       does not trip on erased efuse
+   * - RTC
+     - 0x40101000
+     - 32 kHz tick, BCD sec/min/hour/day counter, alarm compare and
+       IRQ 2 (RTCCnt)
+   * - AES (AHBAES)
+     - 0x40130000
+     - Software AES-128/256 engine, done IRQ (n10)
+   * - I/D cache ctrl / flash SPI ctrl
+     - 0x40140000 / 0x40141000 / 0x40150000
+     - Config-storage (QEMU has no cache semantics)
+   * - USB (DWC2)
+     - 0x40180000
+     - Host-capable DWC2 plus a device-mode fake-host bench
+       (``gadget-host-test`` property) validated against the CherryUSB
+       HID mouse demo (step0 device descriptor 0xffff VID/PID, step3
+       config descriptor containing 09 21 HID, enumeration complete)
+
+Remaining APB/AHB windows are covered by a wide RAZ region
+(``ing916-apb`` at 0x40000000 size 1 MiB, ``ing916-aon`` at 0x40100000
+size 128 KiB) that logs unimplemented accesses with ``-d guest_errors``
+instead of faulting.  Specific blocks mapped after those windows take
+priority.
+
+Running firmware
+----------------
+
+Load a raw binary; it lands at flash offset 0x2000 (0x02002000) where
+the vendor boot ROM jumps and VTOR is initialised:
+
+.. code-block:: console
+
+   $ LD_LIBRARY_PATH=/usr/lib ./build/qemu-system-arm -M ing916 \
+       -kernel ~/qemu/ingchips/916_aux/build-linux/ING916xx.bin -nographic
+
+With the 916_aux HID demo the console shows the board banner and then
+the gadget bench trace:
+
+.. code-block:: console
+
+   board_init done
+   USB demo initialized (DWC2 @0x40180000)
+   [gadget-host] connected
+   [gadget-host] step0 (20 bytes): 12 01 ... ff ff ...
+   [gadget-host] step3 (36 bytes): 09 02 ... 09 21 ...
+   [gadget-host] enumeration complete
+
+The bench smoke is the machine-level regression; a manual command is
+equivalent to:
+
+.. code-block:: console
+
+   $ LD_LIBRARY_PATH=/usr/lib ./build/qemu-system-arm -M ing916 \
+       -kernel ~/qemu/ingchips/916_aux/build-linux/ING916xx.bin -nographic \
+     2>&1 | grep -q "enumeration complete" && echo ok
+
+Debugging tips
+--------------
+
+- ``-d guest_errors`` logs unimplemented-register accesses
+- ``-d int,cpu`` traces exceptions
+- ``-s -S`` plus ``arm-none-eabi-gdb -ex 'target remote :1234'`` for
+  source-level debug
+
+Known limitations
+-----------------
+
+- Shared-RAM coherency and the BLE controller are out of scope.
+- AES is a software engine (XOR whitening + IRQ); not cycle-accurate.
+- QSPI indirect mode still loops back; real flash command sequencing via
+  m25p80 is next-phase, XIP itself is the direct flash window.
+- DMA peripheral handshakes (DmaCtrl routing) are stored but not used to
+  gate transfers; UART RX still uses the PL011 timeout path.
+- AON1_REG5 bit semantics (208's bit13/17:14 write vs bit30/23:20 read
+  alias) is warm-boot-bypassed; a cold-boot translation layer is deferred
+  until real-silicon trace is available.
