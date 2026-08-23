@@ -28,7 +28,10 @@ struct ING208XXSadcState {
 
     MemoryRegion iomem;
     uint32_t regs[ING208XX_SADC_NREGS];
-    uint16_t fixed_value; /* conversion result returned for enabled channels */
+    uint16_t fixed_value; /* legacy single value */
+    uint16_t channel_value[8];
+    QEMUTimer *conv_timer;
+    bool converting;
 };
 
 #define TYPE_ING208XX_TRNG "ing208xx-trng"

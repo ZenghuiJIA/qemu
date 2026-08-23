@@ -33,6 +33,8 @@ struct ING208XXDmaState {
     uint32_t regs[ING208XX_DMA_NREGS];
     uint32_t ctrl;
     uint32_t int_status;
+    uint32_t dmactrl[2];
+    uint32_t fifo_level[ING208XX_DMA_CHANNELS];
 };
 
 #endif

@@ -13,6 +13,7 @@
 #define HW_SSI_ING208XX_SSP_H
 
 #include "hw/core/sysbus.h"
+#include "hw/ssi/ssi.h"
 #include "qom/object.h"
 
 #define REG32(offset) ((offset) / 4)
@@ -27,6 +28,7 @@ struct ING208XXSspState {
 
     MemoryRegion iomem;
     qemu_irq irq;
+    SSIBus *ssi;
 
     uint32_t regs[ING208XX_SSP_NREGS];
     uint8_t tx_fifo[16];
@@ -35,6 +37,7 @@ struct ING208XXSspState {
     int32_t tx_len;
     int32_t rx_head;
     int32_t rx_len;
+    bool is_qspi;
 };
 
 #endif

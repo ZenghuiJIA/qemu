@@ -19,7 +19,9 @@
 #include "qemu/module.h"
 #include "migration/vmstate.h"
 #include "hw/ssi/ing208xx_ssp.h"
+#include "hw/ssi/ssi.h"
 #include "hw/core/sysbus.h"
+#include "hw/core/qdev-properties.h"
 #include "hw/core/irq.h"
 #include "qemu/log.h"
 
@@ -129,13 +131,23 @@ static void ing208xx_ssp_write(void *opaque, hwaddr offset,
         }
         break;
     case REG_CMD:
-        /* full-duplex loopback: queued TX bytes land in the RX FIFO */
-        while (s->tx_len > 0 && s->rx_len < FIFO_DEPTH) {
-            s->rx_fifo[(s->rx_head + s->rx_len) % FIFO_DEPTH] =
-                s->tx_fifo[s->tx_head];
-            s->tx_head = (s->tx_head + 1) % FIFO_DEPTH;
-            s->tx_len--;
-            s->rx_len++;
+        if (s->is_qspi && s->ssi) {
+            while (s->tx_len > 0 && s->rx_len < FIFO_DEPTH) {
+                uint8_t tx = s->tx_fifo[s->tx_head];
+                uint8_t rx = (uint8_t)ssi_transfer(s->ssi, tx);
+                s->rx_fifo[(s->rx_head + s->rx_len) % FIFO_DEPTH] = rx;
+                s->tx_head = (s->tx_head + 1) % FIFO_DEPTH;
+                s->tx_len--;
+                s->rx_len++;
+            }
+        } else {
+            while (s->tx_len > 0 && s->rx_len < FIFO_DEPTH) {
+                s->rx_fifo[(s->rx_head + s->rx_len) % FIFO_DEPTH] =
+                    s->tx_fifo[s->tx_head];
+                s->tx_head = (s->tx_head + 1) % FIFO_DEPTH;
+                s->tx_len--;
+                s->rx_len++;
+            }
         }
         s->regs[REG32(REG_INTRST)] |= INTRST_END;
         ing208xx_ssp_update_irq(s);
@@ -178,10 +190,15 @@ static void ing208xx_ssp_reset_hold(Object *obj, ResetType type)
     qemu_set_irq(s->irq, 0);
 }
 
+static const Property ing208xx_ssp_properties[] = {
+    DEFINE_PROP_BOOL("is-qspi", ING208XXSspState, is_qspi, false),
+};
+
 static void ing208xx_ssp_init(Object *obj)
 {
     ING208XXSspState *s = ING208XX_SSP(obj);
 
+    s->ssi = ssi_create_bus(DEVICE(obj), "ssi");
     memory_region_init_io(&s->iomem, OBJECT(s), &ing208xx_ssp_ops, s,
                           TYPE_ING208XX_SSP, sizeof(s->regs));
     sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->iomem);
@@ -211,6 +228,7 @@ static void ing208xx_ssp_class_init(ObjectClass *klass, const void *data)
 
     dc->vmsd = &ing208xx_ssp_vmstate;
     rc->phases.hold = ing208xx_ssp_reset_hold;
+    device_class_set_props(dc, ing208xx_ssp_properties);
 }
 
 static const TypeInfo ing208xx_ssp_info = {

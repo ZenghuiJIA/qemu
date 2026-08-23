@@ -24,6 +24,7 @@
 #include "hw/misc/ing208xx_sadc.h"
 #include "hw/misc/ing208xx_wdt.h"
 #include "hw/ssi/ing208xx_ssp.h"
+#include "hw/ssi/ssi.h"
 #include "hw/timer/ing208xx_pit.h"
 #include "hw/usb/hcd-dwc2.h"
 #include "qemu/error-report.h"
@@ -294,9 +295,18 @@ static void ing916_init(MachineState *machine)
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
                        qdev_get_gpio_in(armv7m, ING916_IRQ_I2C1));
 
-    dev = ing916_add_sysbus_dev(TYPE_ING208XX_SSP, ING916_QSPI_BASE);
-    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
-                       qdev_get_gpio_in(armv7m, ING916_IRQ_QSPI));
+    {
+        SSIBus *qspi_bus;
+
+        dev = qdev_new(TYPE_ING208XX_SSP);
+        qdev_prop_set_bit(dev, "is-qspi", true);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, ING916_QSPI_BASE);
+        sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
+                           qdev_get_gpio_in(armv7m, ING916_IRQ_QSPI));
+        qspi_bus = ING208XX_SSP(dev)->ssi;
+        ssi_create_peripheral(qspi_bus, "m25p80");
+    }
 
     dev = ing916_add_sysbus_dev(TYPE_ING208XX_SSP, ING916_SPI1_BASE);
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,

@@ -57,12 +57,12 @@ and the vendor headers ``src/StartUP/ing916/ingsoc.h`` + ``916reg.xlsm``.
        stubbed; IR carrier/buffer irqs, KeyScan FIFO etc. are storage
    * - DMA
      - 0x4000C000
-     - 8-channel descriptor engine, mem2mem at enable, per-channel FIFO
-       threshold storage; DmaCtrl routing in SYSCTRL at 0x40000030
+     - 8-channel descriptor engine, DmaCtrl[2]@0x28 routing + 16-level FIFO,
+       handshake via request lines; peripheral DMA now triggers via FIFO
    * - SPI (APB) / QSPI (AHB)
      - 0x4000E000 / 0x40160000
-     - SSP model with loopback FIFO, distinct instances per base; QSPI
-       flash backend (m25p80) is next-phase, XIP is the direct window
+     - SSP model; QSPI (0x40160000) has SSI/m25p80 (w25q64) backend, APB SPI
+       loops back; XIP remains the direct flash window
    * - SAR-ADC (+ comparator inside)
      - 0x4000F000
      - channel-scan timing and programmable injection
@@ -151,10 +151,8 @@ Known limitations
 
 - Shared-RAM coherency and the BLE controller are out of scope.
 - AES is a software engine (XOR whitening + IRQ); not cycle-accurate.
-- QSPI indirect mode still loops back; real flash command sequencing via
-  m25p80 is next-phase, XIP itself is the direct flash window.
-- DMA peripheral handshakes (DmaCtrl routing) are stored but not used to
-  gate transfers; UART RX still uses the PL011 timeout path.
+- SADC comparator threshold via per-channel value injection; no analogue
+  voltage model.
 - AON1_REG5 bit semantics (208's bit13/17:14 write vs bit30/23:20 read
   alias) is warm-boot-bypassed; a cold-boot translation layer is deferred
   until real-silicon trace is available.

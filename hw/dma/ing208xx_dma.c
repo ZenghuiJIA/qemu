@@ -39,6 +39,8 @@
 /* Global registers */
 #define DMA_REG_CTRL        0x20
 #define DMA_REG_ABORT       0x24
+#define DMA_REG_DMACTRL0    0x28
+#define DMA_REG_DMACTRL1    0x2c
 #define DMA_REG_INTSTATUS   0x30
 
 static inline uint32_t dma_ch_reg(int ch, int reg)
@@ -73,29 +75,43 @@ static void ing208xx_dma_start_channel(ING208XXDmaState *s, int ch)
     uint32_t unit = (ctrl & (DESC_CTRL_DST_WORD | DESC_CTRL_SRC_WORD)) ? 4 : 1;
     AddressSpace *as = &address_space_memory;
     int i;
+    bool src_periph = !ing208xx_dma_is_mem(src);
+    bool dst_periph = !ing208xx_dma_is_mem(dst);
 
     if (!(ctrl & DESC_CTRL_ENABLE)) {
         return;
     }
 
-    /* Peripheral request lines are small pseudo addresses */
-    if (!ing208xx_dma_is_mem(src)) {
-        return;
-    }
-
+    s->fifo_level[ch] = 0;
     for (i = 0; i < (int)size; i++) {
         uint8_t buf[4];
         hwaddr soff = src + i * unit;
         hwaddr doff = dst + i * unit;
 
-        if (!ing208xx_dma_is_mem(doff)) {
-                    s->int_status |= DMA_INT_ERR(ch);
-            break;
+        if (src_periph) {
+            buf[0] = 0xa5 + (uint8_t)i;
+            if (unit > 1) {
+                memset(buf + 1, 0xa5, unit - 1);
+            }
+        } else {
+            address_space_read(as, soff, MEMTXATTRS_UNSPECIFIED, buf, unit);
         }
-        address_space_read(as, soff, MEMTXATTRS_UNSPECIFIED, buf, unit);
-        address_space_write(as, doff, MEMTXATTRS_UNSPECIFIED, buf, unit);
+
+        if (dst_periph) {
+            s->fifo_level[ch] = (s->fifo_level[ch] + 1) % 16;
+        } else {
+            if (!ing208xx_dma_is_mem(doff)) {
+                s->int_status |= DMA_INT_ERR(ch);
+                break;
+            }
+            address_space_write(as, doff, MEMTXATTRS_UNSPECIFIED, buf, unit);
+            s->fifo_level[ch] = (s->fifo_level[ch] + 1) % 16;
+        }
+        if (s->fifo_level[ch] == 0 && i + 1 < (int)size) {
+            continue;
+        }
     }
-        s->int_status |= DMA_INT_TC(ch);
+    s->int_status |= DMA_INT_TC(ch);
     ing208xx_dma_update_irq(s);
 }
 
@@ -106,6 +122,10 @@ static uint64_t ing208xx_dma_read(void *opaque, hwaddr offset, unsigned size)
     switch (offset) {
     case DMA_REG_CTRL:
         return s->ctrl;
+    case DMA_REG_DMACTRL0:
+        return s->dmactrl[0];
+    case DMA_REG_DMACTRL1:
+        return s->dmactrl[1];
     case DMA_REG_INTSTATUS:
         return s->int_status;
     default:
@@ -126,9 +146,14 @@ static void ing208xx_dma_write(void *opaque, hwaddr offset,
     case DMA_REG_CTRL:
         s->ctrl = value;
         if (value & 1) {
-            /* global reset asserted: clear all channel descriptors */
             memset(&s->regs[REG32(0x40)], 0, ING208XX_DMA_CHANNELS * 0x20);
         }
+        return;
+    case DMA_REG_DMACTRL0:
+        s->dmactrl[0] = value;
+        return;
+    case DMA_REG_DMACTRL1:
+        s->dmactrl[1] = value;
         return;
     case DMA_REG_ABORT:
         for (ch = 0; ch < ING208XX_DMA_CHANNELS; ch++) {
@@ -184,6 +209,9 @@ static void ing208xx_dma_reset_hold(Object *obj, ResetType type)
     memset(s->regs, 0, sizeof(s->regs));
     s->ctrl = 0;
     s->int_status = 0;
+    s->dmactrl[0] = 0x76543210u;
+    s->dmactrl[1] = 0x76543210u;
+    memset(s->fifo_level, 0, sizeof(s->fifo_level));
     qemu_set_irq(s->irq, 0);
 }
 
@@ -199,12 +227,15 @@ static void ing208xx_dma_init(Object *obj)
 
 static const VMStateDescription ing208xx_dma_vmstate = {
     .name = TYPE_ING208XX_DMA,
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, ING208XXDmaState, ING208XX_DMA_NREGS),
         VMSTATE_UINT32(ctrl, ING208XXDmaState),
         VMSTATE_UINT32(int_status, ING208XXDmaState),
+        VMSTATE_UINT32_ARRAY(dmactrl, ING208XXDmaState, 2),
+        VMSTATE_UINT32_ARRAY(fifo_level, ING208XXDmaState,
+                             ING208XX_DMA_CHANNELS),
         VMSTATE_END_OF_LIST()
     },
 };
