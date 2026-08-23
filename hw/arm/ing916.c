@@ -25,6 +25,7 @@
 #include "hw/misc/ing208xx_wdt.h"
 #include "hw/ssi/ing208xx_ssp.h"
 #include "hw/timer/ing208xx_pit.h"
+#include "hw/usb/hcd-dwc2.h"
 #include "qemu/error-report.h"
 #include "qemu/units.h"
 #include "system/address-spaces.h"
@@ -46,6 +47,7 @@
 #define ING916_TMR0_BASE        0x40002000u
 #define ING916_TMR1_BASE        0x40003000u
 #define ING916_TMR2_BASE        0x40004000u
+#define ING916_PWM_BASE         0x40005000u
 #define ING916_TRNG_BASE        0x40007000u
 #define ING916_DMA_BASE         0x4000C000u
 #define ING916_SPI1_BASE        0x4000E000u
@@ -54,6 +56,8 @@
 #define ING916_GPIO0_BASE       0x40015000u
 #define ING916_GPIO1_BASE       0x40016000u
 #define ING916_QSPI_BASE        0x40160000u
+#define ING916_RTC_BASE         0x40101000u
+#define ING916_USB_BASE         0x40180000u
 /*
  * External interrupt lines per the vendor startup vector table and soc.h:
  * UART0 = 19, UART1 = 18, GPIO0 = 4, GPIO1 = 3, TIMER0 = 7, WDT = 8,
@@ -72,6 +76,7 @@
 #define ING916_IRQ_I2C0         21
 #define ING916_IRQ_DMA          22
 #define ING916_IRQ_TRNG         25
+#define ING916_IRQ_USB          31
 
 static DeviceState *ing916_add_sysbus_dev(const char *type, hwaddr base)
 {
@@ -172,6 +177,14 @@ static void ing916_init(MachineState *machine)
     sysbus_mmio_map(SYS_BUS_DEVICE(sysctl), 1, ING916_AON_BASE);
 
     /*
+     * Behaviourally deferred blocks still get named windows at their SVD
+     * bases (pwm 0x40005000, rtc 0x40101000); mapping them after the wide
+     * RAZ placeholders and the sysctrl AON page gives them priority.
+     */
+    create_unimplemented_device("ing916-pwm", ING916_PWM_BASE, 0x1000);
+    create_unimplemented_device("ing916-rtc", ING916_RTC_BASE, 0x1000);
+
+    /*
      * Peripherals reusing the ING208xx models: their register layouts are
      * identical on the ING916 per the FAMILY_916 SDK header branches and
      * the ing916.svd (ATCWDT200, PIT, ATCGPIO100, descriptor DMA, TRNG,
@@ -182,13 +195,17 @@ static void ing916_init(MachineState *machine)
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
                        qdev_get_gpio_in(armv7m, ING916_IRQ_WDT));
 
-    static const struct { hwaddr base; int irq; } tmr[] = {
-        { ING916_TMR0_BASE, ING916_IRQ_TIMER0 },
-        { ING916_TMR1_BASE, ING916_IRQ_TIMER1 },
-        { ING916_TMR2_BASE, ING916_IRQ_TIMER2 },
+    static const struct { hwaddr base; int irq; const char *clk; } tmr[] = {
+        { ING916_TMR0_BASE, ING916_IRQ_TIMER0, "timer0" },
+        { ING916_TMR1_BASE, ING916_IRQ_TIMER1, "timer1" },
+        { ING916_TMR2_BASE, ING916_IRQ_TIMER2, "timer2" },
     };
     for (i = 0; i < ARRAY_SIZE(tmr); i++) {
-        dev = ing916_add_sysbus_dev(TYPE_ING208XX_PIT, tmr[i].base);
+        dev = qdev_new(TYPE_ING208XX_PIT);
+        qdev_connect_clock_in(dev, "pclk",
+                              qdev_get_clock_out(sysctl, tmr[i].clk));
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, tmr[i].base);
         sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
                            qdev_get_gpio_in(armv7m, tmr[i].irq));
     }
@@ -224,10 +241,21 @@ static void ing916_init(MachineState *machine)
 
     uart = qdev_new(TYPE_PL011);
     qdev_prop_set_chr(uart, "chardev", serial_hd(0));
+    qdev_connect_clock_in(uart, "clk",
+                          qdev_get_clock_out(sysctl, "uart0"));
     sysbus_realize_and_unref(SYS_BUS_DEVICE(uart), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(uart), 0, ING916_UART0_BASE);
     sysbus_connect_irq(SYS_BUS_DEVICE(uart), 0,
                        qdev_get_gpio_in(armv7m, ING916_IRQ_UART0));
+
+    /* USB controller: Synopsys DWC2 IP, int_usb = n31 per the vendor soc.h. */
+    dev = qdev_new(TYPE_DWC2_USB);
+    object_property_add_const_link(OBJECT(dev), "dma-mr",
+                                   OBJECT(get_system_memory()));
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, ING916_USB_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
+                       qdev_get_gpio_in(armv7m, ING916_IRQ_USB));
 
     armv7m_load_kernel(ARM_CPU(first_cpu), machine->kernel_filename,
                        ING916_BOOT_ADDR, ING916_FLASH_SIZE - 0x2000);

@@ -784,3 +784,4 @@ config ING916
     select ING208XX_PERIPH
     select ING208XX_I2C
     select ING208XX_SSP
+    select USB_DWC2

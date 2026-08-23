@@ -39,14 +39,37 @@ struct ING916SysctrlState {
     uint32_t aon_regs[ING916_AON_NREGS];
 
     /*
-     * Derived HCLK output, recomputed from the SDK SYSCTRL_GetHClk() formula
-     * which spans both windows:
-     *   slow = AON1 reg0x10 bit8 ? OSC(24 MHz) : internal RC default (64 MHz)
-     *   pll  = AON2 reg0x1a8 bit20 ? slow * loop(PllCtrl[14:7]) /
-     *          (pre(PllCtrl[6:1]) * out(PllCtrl[20:15])) : 0
-     *   hclk = CguCfg[1] bit14 ? pll / div(CguCfg[0][3:0]) : slow
+     * Behavioural clock tree per the vendor RTL block diagram (Renode doc/
+     * 916时钟树.md). All outputs are recomputed from the register arrays on
+     * every CguCfg/PllCtrl/AON write:
+     *
+     *   roots:  OSC 24 MHz; internal RC raw 48 MHz fixed /2 -> 24 MHz;
+     *           clk_32k 32768 Hz; PLL = ref * loop / (pre * out)
+     *   sclk    = slow-root mux (both real sources are 24 MHz)
+     *   hclk    = CguCfg[1].bit14 ? pll / div(CguCfg[0][3:0]) : sclk
+     *             (the SDK SYSCTRL_GetHClk() formula, verified)
+     *   pclk    = hclk / div_pclk_denom
+     *   pclk_aon= hclk / div_aon_denom            (112/8 = 14 MHz, cross-checked)
+     *   timers  = mux(timer_div_out = sclk/div_timer_denom, clk_32k)
+     *   uarts   = mux(sclk, hclk); spi likewise
+     *   usb48   = pll_en ? pll / div_usb_denom : 0
+     *   adc_out = sclk * num / denom
+     *
+     * Denominator bitfields marked "(provisional)" below follow the RTL doc
+     * defaults but their exact word layout still awaits a 916reg.xlsm sheet
+     * cross-check; firmware only reprograms the verified HCLK fields today.
      */
+    Clock *sclk;
     Clock *hclk;
+    Clock *pclk;
+    Clock *pclk_aon;
+    Clock *timer_div_out;
+    Clock *timer[3];
+    Clock *uart[2];
+    Clock *spi;
+    Clock *usb48;
+    Clock *adc_out;
+    Clock *clk32k;
 };
 
 #endif
