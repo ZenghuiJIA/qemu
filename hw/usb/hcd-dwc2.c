@@ -1122,6 +1122,8 @@ static uint64_t dwc2_hsotg_read(void *ptr, hwaddr addr, unsigned size)
         break;
     case HSOTG_REG(0x800) ... HSOTG_REG(0xdfc):
         /* Gadget-mode registers, just return 0 for now */
+        qemu_log_mask(LOG_UNIMP, "%s: gadget read 0x%" HWADDR_PRIx "\n",
+                      __func__, addr);
         val = 0;
         break;
     case HSOTG_REG(0xe00) ... HSOTG_REG(0xffc):
@@ -1149,6 +1151,8 @@ static void dwc2_hsotg_write(void *ptr, hwaddr addr, uint64_t val,
         break;
     case HSOTG_REG(0x104) ... HSOTG_REG(0x3fc):
         /* Gadget-mode registers, do nothing for now */
+        qemu_log_mask(LOG_UNIMP, "%s: gadget write 0x%" HWADDR_PRIx
+                      " = 0x%" PRIx64 "\n", __func__, addr, val);
         break;
     case HSOTG_REG(0x400) ... HSOTG_REG(0x4fc):
         dwc2_hreg0_write(ptr, addr, (addr - HSOTG_REG(0x400)) >> 2, val, size);
@@ -1158,6 +1162,8 @@ static void dwc2_hsotg_write(void *ptr, hwaddr addr, uint64_t val,
         break;
     case HSOTG_REG(0x800) ... HSOTG_REG(0xdfc):
         /* Gadget-mode registers, do nothing for now */
+        qemu_log_mask(LOG_UNIMP, "%s: gadget write 0x%" HWADDR_PRIx
+                      " = 0x%" PRIx64 "\n", __func__, addr, val);
         break;
     case HSOTG_REG(0xe00) ... HSOTG_REG(0xffc):
         dwc2_pcgreg_write(ptr, addr, (addr - HSOTG_REG(0xe00)) >> 2, val, size);
@@ -1273,11 +1279,13 @@ static void dwc2_reset_enter(Object *obj, ResetType type)
                  GHWCFG2_PERIO_EP_SUPPORTED |
                  ((DWC2_NB_CHAN - 1) << GHWCFG2_NUM_HOST_CHAN_SHIFT) |
                  (GHWCFG2_INT_DMA_ARCH << GHWCFG2_ARCHITECTURE_SHIFT) |
+                 (7 << GHWCFG2_NUM_DEV_EP_SHIFT) |      /* 8 device EPs */
+                 (1 << GHWCFG2_HS_PHY_TYPE_SHIFT) |     /* UTMI+ PHY */
                  (GHWCFG2_OP_MODE_NO_SRP_CAPABLE_HOST << GHWCFG2_OP_MODE_SHIFT);
     s->ghwcfg3 = (4096 << GHWCFG3_DFIFO_DEPTH_SHIFT) |
                  (4 << GHWCFG3_PACKET_SIZE_CNTR_WIDTH_SHIFT) |
                  (4 << GHWCFG3_XFER_SIZE_CNTR_WIDTH_SHIFT);
-    s->ghwcfg4 = 0;
+    s->ghwcfg4 = (7 << GHWCFG4_NUM_IN_EPS_SHIFT);       /* 8 IN EPs */
     s->glpmcfg = 0;
     s->gpwrdn = GPWRDN_PWRDNRSTN;
     s->gdfifocfg = 0;
