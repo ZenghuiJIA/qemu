@@ -27,7 +27,7 @@
 
 #define WDT_IDREV           ((0x03002u << 12) | 0x04)
 #define WDT_RESTART_NUM     0xCAFEu
-#define WDT_WP_NUM          0x5AB0u
+#define WDT_WP_NUM          0x5AA5u
 
 #define WDT_CTRL_EN         BIT(0)
 #define WDT_CTRL_INT_EN     BIT(2)

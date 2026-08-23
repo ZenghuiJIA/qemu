@@ -205,6 +205,12 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
             ING208XX_IRQ_TIMER0, ING208XX_IRQ_TIMER1,
         };
 
+        /*
+         * Counting clock tracks the derived HCLK (128 MHz once the vendor
+         * boot config lands), replacing the legacy fixed-rate assumption.
+         */
+        qdev_connect_clock_in(DEVICE(&(s->pit[i])), "pclk",
+                              qdev_get_clock_out(DEVICE(&s->aon), "hclk"));
         if (!sysbus_realize(SYS_BUS_DEVICE(&(s->pit[i])), errp)) {
             return;
         }
