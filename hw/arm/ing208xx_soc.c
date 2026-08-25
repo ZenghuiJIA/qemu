@@ -303,7 +303,9 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
 
     /* USB controller: Synopsys DWC2 IP */
     object_property_add_const_link(OBJECT(&s->usb), "dma-mr",
-                                   OBJECT(get_system_memory()));
+                                    OBJECT(get_system_memory()));
+    object_property_set_bool(OBJECT(&s->usb), "gadget-host-test", true,
+                               &error_abort);
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->usb), errp)) {
         return;
     }
