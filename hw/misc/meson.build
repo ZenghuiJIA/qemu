@@ -183,3 +183,4 @@ system_ss.add(when: 'CONFIG_ING916_SYSCTRL', if_true: files('ing916_sysctrl.c',
                                                                  'ing916_config_storage.c',
                                                                  'ing916_rtc.c',
                                                                  'ing916_aes.c'))
+system_ss.add(when: 'CONFIG_ING_TRAP', if_true: files('ing_rom.c'))

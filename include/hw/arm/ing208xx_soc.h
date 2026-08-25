@@ -29,6 +29,7 @@
 #include "hw/gpio/ing208xx_gpio.h"
 #include "hw/misc/ing208xx_sysctrl.h"
 #include "hw/misc/ing208xx_wdt.h"
+#include "hw/misc/ing_rom.h"
 #include "hw/timer/ing208xx_pit.h"
 #include "hw/timer/ing208xx_rtimer.h"
 #include "qom/object.h"
@@ -174,6 +175,7 @@ struct ING208XXState {
     ING208XXRtimerState rtimer[2];
     OrIRQState rtmr_or;
     ING208XXGpioState gpio[2];
+    IngTrapState trap;
 
     Clock *sysclk;
     Clock *refclk;

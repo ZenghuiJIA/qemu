@@ -150,37 +150,52 @@ struct DWC2State {
         };
     };
 
-    /* TODO - implement FIFO registers for slave mode */
-#define DWC2_HFIFO_SIZE     (0x1000 * DWC2_NB_CHAN)
+    /* Device-mode register block */
+    union {
+#define DWC2_DREG_SIZE    0x70
+        uint32_t dreg[DWC2_DREG_SIZE / sizeof(uint32_t)];
+        struct {
+            uint32_t dcfg;        /* 800 */
+            uint32_t dctl;        /* 804 */
+            uint32_t dsts;        /* 808, read-only */
+            uint32_t dreg_rsvd0;  /* 80c */
+            uint32_t diepmsk;     /* 810 */
+            uint32_t doepmsk;     /* 814 */
+            uint32_t dreg_rsvd1;  /* 818, DAINT computed on read */
+            uint32_t daintmsk;    /* 81c */
+            uint32_t dreg_rsvd2[2]; /* 820-827 */
+            uint32_t dvbusdis;    /* 828 */
+            uint32_t dvbuspulse;  /* 82c */
+            uint32_t dreg_rsvd3;  /* 830 */
+            uint32_t diepempmsk;  /* 834 */
+        };
+    };
 
-    /*
-     * Device-mode "fake host" bench state (enabled via the
-     * "gadget-host-test" property): a host-side state machine that
-     * drives control enumeration against the guest device stack through
-     * the slave-mode FIFO interface.  Not migrated; reinitialised in
-     * dwc2_reset_hold().
-     */
-    bool gadget_host_test;
-#define DWC2_DREG_SIZE      0x100   /* device globals, HSOTG 0x800..0x8ff */
-#define DWC2_NB_DEV_EP      8       /* IN+OUT EPs */
-#define GH_DFIFO_BYTES      64
-    uint32_t dreg[DWC2_DREG_SIZE / sizeof(uint32_t)];
-    uint32_t diep[8 * DWC2_NB_DEV_EP];   /* 8 words per EP @ 0x900+.. */
-    uint32_t doep[8 * DWC2_NB_DEV_EP];   /* 8 words per EP @ 0xb00+.. */
-    uint32_t dsts;                       /* DSTS is RO, off dreg */
-    uint32_t daint_pend;                 /* DAINT is RO */
-    uint32_t dieptxf[4];                 /* DIEPTXF1..4 @ 0x544.. */
-    uint32_t gh_entry;
+#define DWC2_NB_EP           8
+#define DWC2_DIEP_SIZE       (0x20 * DWC2_NB_EP)
+    uint32_t diep[DWC2_DIEP_SIZE / sizeof(uint32_t)]; /* from 900 */
+    uint32_t doep[DWC2_DIEP_SIZE / sizeof(uint32_t)]; /* from b00 */
+
+    uint32_t dieptxf[DWC2_NB_EP - 1];                 /* 128+, EP1..n TX fifo */
+
+    uint32_t daint_pend;           /* raw per-EP pending, IN[15:0]/OUT[31:16] */
+
+    uint8_t dfifo[0x2000];
+    uint32_t dfifo_rptr;
+    uint32_t dfifo_wptr;
     bool grx_pending;
-    uint8_t dfifo[GH_DFIFO_BYTES];
-    uint16_t dfifo_rptr;
-    uint16_t dfifo_wptr;
+    uint32_t grx_entry;
+
     QEMUTimer *gadget_timer;
-    uint8_t gh_state;
-    uint8_t gh_step;
+    int gh_state;
+    unsigned gh_step;
+    unsigned gh_polls;
     bool gh_txfe_sent;
-    uint16_t gh_last_wptr;
-    uint8_t gh_stall_cnt;
+    uint32_t gh_last_wptr;
+    unsigned gh_stall;
+    bool gadget_host_test;
+
+#define DWC2_HFIFO_SIZE     (0x1000 * DWC2_NB_CHAN)
 
     /*
      *  Internal state

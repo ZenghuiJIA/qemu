@@ -42,6 +42,7 @@ static void ing208xx_soc_initfn(Object *obj)
     int i;
 
     object_initialize_child(obj, "armv7m", &s->armv7m, TYPE_ARMV7M);
+    object_initialize_child(obj, "trap", &s->trap, TYPE_ING_TRAP);
 
     for (i = 0; i < ING208XX_NUM_UARTS; i++) {
         object_initialize_child(obj, "uart[*]", &s->uart[i], TYPE_PL011);
@@ -100,11 +101,9 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
     clock_set_hz(s->refclk, ING208XX_RTC_CLK_FREQ);
 
     /*
-     * Boot ROM stub: the vendor mask ROM holds power-up/PLL sequences the
-     * SDK calls through hardcoded entry points (e.g. SYSCTRL_Init calls
-     * 0x101d/0xf05/0xe21). Fill the whole region with "bx lr" so every
-     * ROM call becomes an immediate return. A real ROM image can replace
-     * this later via -object loader / -bios once available.
+     * Boot ROM: every entry is bx lr except the hard-coded helpers
+     * that need behavioural stubs (see hw/misc/ing_rom.c).
+     * The 20-family table differs from 916 (different ROM image).
      */
     memory_region_init_ram(&s->rom, OBJECT(dev_soc), "ING208xx.rom",
                            ING208XX_ROM_SIZE, &error_fatal);
@@ -116,6 +115,7 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
             p[idx] = 0x4770; /* bx lr */
         }
     }
+    ing_rom_patch_208(&s->rom);
     memory_region_set_readonly(&s->rom, true);
     memory_region_add_subregion(system_memory, ING208XX_ROM_BASE, &s->rom);
 
@@ -127,6 +127,19 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
     memory_region_init_rom(&s->flash, OBJECT(dev_soc), "ING208xx.flash",
                            ING208XX_FLASH_SIZE, &error_fatal);
     memory_region_add_subregion(system_memory, ING208XX_FLASH_BASE, &s->flash);
+
+    /* ROM trap window at ING_TRAP_BASE: must be after any broad
+     * unimplemented APB window so it takes priority.
+     */
+    {
+        DeviceState *trap = DEVICE(&s->trap);
+        qdev_prop_set_uint32(trap, "family", ING_TRAP_FAMILY_20);
+        if (!sysbus_realize(SYS_BUS_DEVICE(trap), errp)) {
+            return;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(trap), 0, ING_TRAP_BASE);
+        ing_trap_set_flash(ING_TRAP(trap), &s->flash);
+    }
 
     memory_region_init_ram(&s->sram, NULL, "ING208xx.sram",
                            ING208XX_SRAM_SIZE, &error_fatal);

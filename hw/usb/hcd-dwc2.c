@@ -692,12 +692,12 @@ static uint64_t dwc2_glbreg_read(void *ptr, hwaddr addr, int index,
         break;
     case GRXSTSR:
         if (s->grx_pending) {
-            val = s->gh_entry;
+            val = s->grx_entry;
         }
         break;
     case GRXSTSP:
         if (s->grx_pending) {
-            val = s->gh_entry;
+            val = s->grx_entry;
             s->grx_pending = false;
             s->grxstsp = 0;
             s->gintsts &= ~GINTSTS_RXFLVL;
@@ -1154,12 +1154,12 @@ static void gh_epint_raise(DWC2State *s, int ep, bool dir_in, uint32_t bits)
 static void gh_push_rx(DWC2State *s, uint32_t pktsts, uint32_t bcnt,
                        uint32_t epnum)
 {
-    s->gh_entry = (pktsts << GRXSTS_PKTSTS_SHIFT) |
+    s->grx_entry = (pktsts << GRXSTS_PKTSTS_SHIFT) |
                   (bcnt << GRXSTS_BYTECNT_SHIFT) |
                   (epnum << GRXSTS_EPNUM_SHIFT);
     s->grx_pending = true;
-    s->grxstsr = s->gh_entry;
-    s->grxstsp = s->gh_entry;
+    s->grxstsr = s->grx_entry;
+    s->grxstsp = s->grx_entry;
     s->gintsts |= GINTSTS_RXFLVL;
     dwc2_update_irq(s);
 }
@@ -1265,18 +1265,18 @@ static void gh_tick(void *opaque)
             break;
         }
         len = s->dfifo_wptr;
-        if (len > GH_DFIFO_BYTES) {
-            len = GH_DFIFO_BYTES;
+        if (len > 0x2000) {
+            len = 0x2000;
         }
         if (len >= want) {
             goto gh_stage_done;
         }
         if (s->dfifo_wptr == s->gh_last_wptr) {
-            if (++s->gh_stall_cnt >= 30) {
+            if (++s->gh_stall >= 30) {
                 goto gh_stage_done;
             }
         } else {
-            s->gh_stall_cnt = 0;
+            s->gh_stall = 0;
         }
         s->gh_last_wptr = s->dfifo_wptr;
         timer_mod(s->gadget_timer,
@@ -1299,7 +1299,7 @@ gh_stage_done:
             gh_epint_raise(s, 0, false, DXEPINT_XFERCOMPL);
         }
         s->gh_step++;
-        s->gh_stall_cnt = 0;
+        s->gh_stall = 0;
         s->gh_last_wptr = 0;
         s->gh_state = GH_SEND_SETUP;
         timer_mod(s->gadget_timer,
@@ -1361,7 +1361,7 @@ static void dwc2_dreg_write(void *ptr, hwaddr addr, uint64_t val,
             s->diep[idx] = old & ~val;
             if (s->diep[idx] != old) {
                 s->daint_pend &= ~(1u << (idx >> 3));
-                for (ep = 0; ep < DWC2_NB_DEV_EP; ep++) {
+                for (ep = 0; ep < DWC2_NB_EP; ep++) {
                     if (s->diep[ep * 8 + 2]) {
                         any = true;
                         break;
@@ -1378,7 +1378,7 @@ static void dwc2_dreg_write(void *ptr, hwaddr addr, uint64_t val,
             if (idx == 4) {
                 s->dfifo_wptr = 0;
                 s->gh_last_wptr = 0;
-                s->gh_stall_cnt = 0;
+                s->gh_stall = 0;
             }
             s->diep[idx] = (uint32_t)val;
             break;
@@ -1402,7 +1402,7 @@ static void dwc2_dreg_write(void *ptr, hwaddr addr, uint64_t val,
             s->doep[idx] = old & ~val;
             if (s->doep[idx] != old) {
                 s->daint_pend &= ~(1u << ((idx >> 3) + 16));
-                for (ep = 0; ep < DWC2_NB_DEV_EP; ep++) {
+                for (ep = 0; ep < DWC2_NB_EP; ep++) {
                     if (s->doep[ep * 8 + 2]) {
                         any = true;
                         break;
@@ -1709,7 +1709,7 @@ static void dwc2_reset_hold(Object *obj, ResetType type)
     memset(s->dfifo, 0, sizeof(s->dfifo));
     s->dsts = DSTS_ENUMSPD_FS48 << DSTS_ENUMSPD_SHIFT;
     s->daint_pend = 0;
-    s->gh_entry = 0;
+    s->grx_entry = 0;
     s->grx_pending = false;
     s->dfifo_rptr = 0;
     s->dfifo_wptr = 0;
@@ -1717,7 +1717,7 @@ static void dwc2_reset_hold(Object *obj, ResetType type)
     s->gh_step = 0;
     s->gh_txfe_sent = false;
     s->gh_last_wptr = 0;
-    s->gh_stall_cnt = 0;
+    s->gh_stall = 0;
     s->dieptxf[0] = (64 << FIFOSIZE_DEPTH_SHIFT) | 0x500;
     s->dieptxf[1] = (64 << FIFOSIZE_DEPTH_SHIFT) | 0x540;
 

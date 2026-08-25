@@ -18,6 +18,7 @@
 #include "hw/char/pl011.h"
 #include "hw/misc/unimp.h"
 #include "hw/misc/ing916_sysctrl.h"
+#include "hw/misc/ing_rom.h"
 #include "hw/dma/ing208xx_dma.h"
 #include "hw/gpio/ing208xx_gpio.h"
 #include "hw/i2c/ing208xx_i2c.h"
@@ -117,12 +118,14 @@ static void ing916_init(MachineState *machine)
     MemoryRegion *share = g_new(MemoryRegion, 1);
 
     /*
-     * Boot ROM stub: the vendor mask ROM holds power-up/PLL and factory
-     * data helpers the SDK calls through hardcoded entry points (e.g.
-     * SYSCTRL_Init -> flash_get_factory_calib_data calls 0x7c9/0x651/
-     * 0x80d). Fill the whole region with "bx lr" so every ROM call
-     * becomes an immediate return. A real ROM image can replace this
-     * later via -object loader / -bios once available.
+     * Boot ROM: every word is bx lr (return immediately) except the
+     * hard-coded entry points that have behavioural stubs.  See
+     * hw/misc/ing_rom.c for the per-family tables:
+     *   - flash helpers (program/write/do_update, sector erase, page prog)
+     *     are emulated against the legal XIP window 0x02000000
+     *   - crc/status/RUID are computed
+     *   - cache/power/PLL are intentional NOPs (bx lr remains).
+     * The trap window at ING_TRAP_BASE hosts the MMIO side-effects.
      */
     memory_region_init_ram(rom, NULL, "ing916.boot-rom",
                            ING916_ROM_SIZE, &error_fatal);
@@ -134,6 +137,7 @@ static void ing916_init(MachineState *machine)
             p[idx] = 0x4770; /* bx lr */
         }
     }
+    ing_rom_patch_916(rom);
     memory_region_set_readonly(rom, true);
     memory_region_add_subregion(get_system_memory(), ING916_ROM_BASE, rom);
 
@@ -141,6 +145,17 @@ static void ing916_init(MachineState *machine)
                            ING916_FLASH_SIZE, &error_fatal);
     memory_region_add_subregion(get_system_memory(), ING916_FLASH_BASE,
                                 flash);
+
+    /* ROM trap: must be mapped after the broad APB unimplemented window
+     * so the 4 KiB window at ING_TRAP_BASE takes priority.
+     */
+    {
+        DeviceState *trap = qdev_new(TYPE_ING_TRAP);
+        qdev_prop_set_uint32(trap, "family", ING_TRAP_FAMILY_916);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(trap), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(trap), 0, ING_TRAP_BASE);
+        ing_trap_set_flash(ING_TRAP(trap), flash);
+    }
 
     memory_region_init_ram(sram, NULL, "ing916.sram",
                            ING916_SRAM_SIZE, &error_fatal);
