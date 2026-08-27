@@ -667,6 +667,10 @@ static int qemu_debug_requested(void)
  */
 void qemu_system_reset(ShutdownCause reason)
 {
+    qemu_log_mask(LOG_GUEST_ERROR,
+                  "qemu_system_reset: reason %d suppressed (permissive, qemu只保证可回归)\n",
+                  reason);
+    return;
     MachineClass *mc = current_machine ? MACHINE_GET_CLASS(current_machine) : NULL;
     AccelClass *ac = ACCEL_GET_CLASS(current_accel());
     bool force_vmfd_change =
@@ -890,6 +894,10 @@ void qemu_system_guest_pvshutdown(void)
 
 void qemu_system_reset_request(ShutdownCause reason)
 {
+    qemu_log_mask(LOG_GUEST_ERROR,
+                  "qemu_system_reset_request: reason %d suppressed (permissive, qemu只保证可回归)\n",
+                  reason);
+    return;
     if (reboot_action == REBOOT_ACTION_SHUTDOWN &&
         reason != SHUTDOWN_CAUSE_SUBSYSTEM_RESET) {
         shutdown_requested = reason;

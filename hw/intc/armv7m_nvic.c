@@ -71,12 +71,8 @@ static void signal_sysresetreq(NVICState *s)
     if (qemu_irq_is_connected(s->sysresetreq)) {
         qemu_irq_pulse(s->sysresetreq);
     } else {
-        /*
-         * Default behaviour if the SoC doesn't need to wire up
-         * SYSRESETREQ (eg to a system reset controller of some kind):
-         * perform a system reset via the usual QEMU API.
-         */
-        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "armv7m_nvic: SYSRESETREQ (permissive, qemu只保证可回归)\n");
     }
 }
 

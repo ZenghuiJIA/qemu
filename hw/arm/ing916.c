@@ -30,8 +30,11 @@
 #include "hw/usb/hcd-dwc2.h"
 #include "qemu/error-report.h"
 #include "qemu/units.h"
+#include <inttypes.h>
 #include "system/address-spaces.h"
 #include "system/system.h"
+#include "hw/core/loader.h"
+#include "qemu/log.h"
 
 #define ING916_ROM_BASE         0x00000000u
 #define ING916_ROM_SIZE         (120 * KiB)
@@ -95,6 +98,19 @@
 #define ING916_IRQ_DMA          22
 #define ING916_IRQ_TRNG         25
 #define ING916_IRQ_USB          31
+
+static char *ing916_platform_bin;
+
+static char *ing916_get_platform_bin(Object *obj, Error **errp)
+{
+    return g_strdup(ing916_platform_bin);
+}
+
+static void ing916_set_platform_bin(Object *obj, const char *value, Error **errp)
+{
+    g_free(ing916_platform_bin);
+    ing916_platform_bin = g_strdup(value);
+}
 
 static DeviceState *ing916_add_sysbus_dev(const char *type, hwaddr base)
 {
@@ -177,8 +193,11 @@ static void ing916_init(MachineState *machine)
     armv7m = qdev_new(TYPE_ARMV7M);
     qdev_prop_set_uint32(armv7m, "num-irq", 64);
     qdev_prop_set_string(armv7m, "cpu-type", ARM_CPU_TYPE_NAME("cortex-m4"));
-    qdev_prop_set_uint32(armv7m, "init-svtor", ING916_BOOT_ADDR);
-    qdev_prop_set_uint32(armv7m, "init-nsvtor", ING916_BOOT_ADDR);
+    {
+        hwaddr vtor = ing916_platform_bin ? 0x02028000 : ING916_BOOT_ADDR;
+        qdev_prop_set_uint32(armv7m, "init-svtor", vtor);
+        qdev_prop_set_uint32(armv7m, "init-nsvtor", vtor);
+    }
     object_property_set_link(OBJECT(armv7m), "memory",
                              OBJECT(get_system_memory()), &error_abort);
     qdev_connect_clock_in(armv7m, "cpuclk",
@@ -357,14 +376,45 @@ static void ing916_init(MachineState *machine)
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
                        qdev_get_gpio_in(armv7m, ING916_IRQ_USB));
 
-    armv7m_load_kernel(ARM_CPU(first_cpu), machine->kernel_filename,
-                       ING916_BOOT_ADDR, ING916_FLASH_SIZE - 0x2000);
+    /* Dual-image loader: platform at FLASH_BASE, app at APP_BASE when platform present */
+    if (ing916_platform_bin) {
+        int plat_sz = load_image_targphys(ing916_platform_bin,
+                                          ING916_FLASH_BASE,
+                                          ING916_FLASH_SIZE, NULL);
+        if (plat_sz < 0) {
+            error_report("could not load platform image '%s'",
+                         ing916_platform_bin);
+            exit(1);
+        }
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "ing916: platform %s loaded (%d bytes) at 0x%x\n",
+                      ing916_platform_bin, plat_sz, ING916_FLASH_BASE);
+    }
+    {
+        hwaddr app_addr = ing916_platform_bin ? 0x02028000 : ING916_BOOT_ADDR;
+        uint64_t app_max = ing916_platform_bin ? (ING916_FLASH_SIZE - 0x28000)
+                                               : (ING916_FLASH_SIZE - 0x2000);
+        armv7m_load_kernel(ARM_CPU(first_cpu), machine->kernel_filename,
+                           app_addr, app_max);
+    }
+
+    /* Permissive share-ram SP + LLE passthrough: log only, not fault (qemu只保证可回归) */
+    if (ing916_platform_bin || machine->kernel_filename) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "ing916: share-ram 0x%" PRIx64 " size 0x%" PRIx64 " permissive as SP, LLE passthrough\n",
+                      (uint64_t)ING916_SHARE_BASE, (uint64_t)ING916_SHARE_SIZE);
+    }
 }
 
 static void ing916_machine_init(MachineClass *mc)
 {
     mc->desc = "Ingchips ING916xx (Cortex-M4F)";
     mc->init = ing916_init;
+    object_class_property_add_str(OBJECT_CLASS(mc), "platform-bin",
+                                  ing916_get_platform_bin,
+                                  ing916_set_platform_bin);
+    object_class_property_set_description(OBJECT_CLASS(mc), "platform-bin",
+                                          "Platform binary loaded at FLASH_BASE before app kernel");
 }
 
 DEFINE_MACHINE_ARM("ing916", ing916_machine_init)

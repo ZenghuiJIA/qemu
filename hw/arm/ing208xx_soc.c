@@ -25,6 +25,9 @@
 #include "hw/misc/unimp.h"
 #include "system/address-spaces.h"
 #include "system/system.h"
+#include "hw/core/loader.h"
+#include "qemu/log.h"
+#include "qemu/error-report.h"
 
 static const uint32_t uart_addr[ING208XX_NUM_UARTS] = {
     ING208XX_UART0_BASE,
@@ -128,6 +131,27 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
                            ING208XX_FLASH_SIZE, &error_fatal);
     memory_region_add_subregion(system_memory, ING208XX_FLASH_BASE, &s->flash);
 
+    /* Dual-image loader: if platform-bin supplied, load it at FLASH_BASE.
+     * The app kernel will be loaded by the board at BOOT_ADDR (0x02002000).
+     * Share-ram as SP is permissive, LLE passthrough is RAM retention.
+     */
+    if (s->platform_bin) {
+        int plat_sz = load_image_targphys(s->platform_bin,
+                                          ING208XX_FLASH_BASE,
+                                          ING208XX_FLASH_SIZE, NULL);
+        if (plat_sz < 0) {
+            error_setg(errp, "could not load platform image '%s'",
+                       s->platform_bin);
+            return;
+        }
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "ing208xx: platform %s loaded (%d bytes) at 0x%x\n",
+                      s->platform_bin, plat_sz, ING208XX_FLASH_BASE);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "ing208xx: share-ram 0x%x size 0x%x permissive, LLE passthrough (qemu只保证可回归)\n",
+                      ING208XX_SHARE_RAM_BASE, ING208XX_SHARE_RAM_SIZE);
+    }
+
     /* ROM trap window at ING_TRAP_BASE: must be after any broad
      * unimplemented APB window so it takes priority.
      */
@@ -155,9 +179,12 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
     qdev_prop_set_uint8(armv7m, "num-prio-bits", ING208XX_NUM_PRIO_BITS);
     qdev_prop_set_string(armv7m, "cpu-type", ARM_CPU_TYPE_NAME("cortex-m3"));
     qdev_prop_set_bit(armv7m, "enable-bitband", true);
-    qdev_prop_set_uint32(armv7m, "init-svtor", ING208XX_BOOT_ADDR);
-    /* M-profile without security reads vectors from the NS VTOR at reset */
-    qdev_prop_set_uint32(armv7m, "init-nsvtor", ING208XX_BOOT_ADDR);
+    {
+        hwaddr vtor = s->platform_bin ? 0x0202a000 : ING208XX_BOOT_ADDR;
+        qdev_prop_set_uint32(armv7m, "init-svtor", vtor);
+        /* M-profile without security reads vectors from the NS VTOR at reset */
+        qdev_prop_set_uint32(armv7m, "init-nsvtor", vtor);
+    }
     /*
      * cpuclk tracks the derived HCLK: the AON block recomputes it from
      * the slow-clock/PLL selection registers as firmware configures them.
@@ -334,11 +361,16 @@ static void ing208xx_soc_realize(DeviceState *dev_soc, Error **errp)
 
 }
 
+static const Property ing208xx_soc_properties[] = {
+    DEFINE_PROP_STRING("platform-bin", ING208XXState, platform_bin),
+};
+
 static void ing208xx_soc_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = ing208xx_soc_realize;
+    device_class_set_props(dc, ing208xx_soc_properties);
     /* No vmstate or reset required: device has no internal state */
 }
 

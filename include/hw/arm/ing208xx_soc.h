@@ -179,6 +179,8 @@ struct ING208XXState {
 
     Clock *sysclk;
     Clock *refclk;
+
+    char *platform_bin;
 };
 
 #endif

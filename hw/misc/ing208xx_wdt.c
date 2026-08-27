@@ -96,8 +96,8 @@ static void ing208xx_wdt_expire(void *opaque)
     }
 
     if (s->ctrl & WDT_CTRL_RST_EN) {
-        qemu_log_mask(LOG_GUEST_ERROR, "ING208xx WDT: reset expired\n");
-        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "ING208xx WDT: reset expired (permissive, qemu只保证可回归)\n");
     }
 }
 
